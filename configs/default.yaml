@@ -44,6 +44,7 @@ model:
   gbm_max_iter: 400
   gbm_learning_rate: 0.03
   gbm_max_depth: 4
+  rf_n_estimators: 250
   random_state: 42
 
 training:
@@ -75,7 +76,7 @@ portfolio:
   max_net_dv01: 15000.0
   max_weight_per_tenor: 0.5
   dv01_neutral: false
-  turnover_penalty: 5.0
+  turnover_penalty: 2.0     # multiple of the modelled transaction cost
   signal_clip: 3.0
   min_signal_to_trade: 0.15
   vol_lookback: 63

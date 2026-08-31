@@ -108,6 +108,14 @@ class FeatureConfig:
     include_carry_rolldown: bool = True
     include_regime: bool = True
     regime_states: int = 3
+    # Minimum fraction of the sample a feature must cover to be kept.  This is
+    # the main lever on the history/breadth trade-off: several FRED series start
+    # late (TIPS breakevens 2003, the broad dollar index 2006, the ICE high-yield
+    # index 2023), and because training drops rows with any missing feature, one
+    # short series truncates the whole sample to its own start date.  At 0.80 the
+    # late starters are dropped and training reaches back to the early 1990s; at
+    # 0.30 they are kept and the sample begins around 2007.
+    min_feature_coverage: float = 0.80
     # Features are lagged by this many business days before being used to predict
     # the *next* day's move.  1 = strictly information available at t-1 close.
     feature_lag: int = 1
@@ -130,7 +138,7 @@ class ModelConfig:
     gbm_learning_rate: float = 0.03
     gbm_max_depth: int = 4
     gbm_l2: float = 1.0
-    rf_n_estimators: int = 400
+    rf_n_estimators: int = 250
     rf_max_depth: int = 8
     lstm_hidden: int = 64
     lstm_layers: int = 2
@@ -185,7 +193,11 @@ class PortfolioConfig:
     max_net_dv01: float = 15_000.0
     max_weight_per_tenor: float = 0.5
     dv01_neutral: bool = False  # if True, force sum(signed DV01) == 0
-    turnover_penalty: float = 5.0
+    # MULTIPLIER on the estimated one-way transaction cost, not a raw objective
+    # coefficient.  1.0 charges exactly the modelled cost; >1 trades more
+    # reluctantly than cost-neutral, which is usually right because cost models
+    # are optimistic.  See portfolio/optimizer.py for why the units matter.
+    turnover_penalty: float = 2.0
     signal_clip: float = 3.0
     min_signal_to_trade: float = 0.15
     rebalance: str = "daily"  # daily | weekly
