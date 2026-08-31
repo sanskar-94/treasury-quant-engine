@@ -106,8 +106,14 @@ def main() -> int:
 
     # ---- curve models ---- #
     print("\n[3] curve models")
-    from tqe.curve import (bootstrap_history, fit_curve_pca, fit_nss_history_fixed,
-                           par_to_zero, rolling_pca_factors, zero_curve_function)
+    from tqe.curve import (
+        bootstrap_history,
+        fit_curve_pca,
+        fit_nss_history_fixed,
+        par_to_zero,
+        rolling_pca_factors,
+        zero_curve_function,
+    )
 
     nss = fit_nss_history_fixed(curve)
     check("NSS fitted every row", nss["beta0"].notna().all())
@@ -207,7 +213,12 @@ def main() -> int:
     # ---- portfolio optimiser ---- #
     print("\n[8] portfolio optimiser and risk")
     from tqe.portfolio import covariance, mean_variance_weights, risk_parity_weights
-    from tqe.portfolio.risk import apply_stress, expected_shortfall, historical_var, stress_scenarios
+    from tqe.portfolio.risk import (
+        apply_stress,
+        expected_shortfall,
+        historical_var,
+        stress_scenarios,
+    )
 
     cov = covariance(tr.dropna(), method="ewma")
     eig = np.linalg.eigvalsh(cov.to_numpy())
@@ -321,4 +332,4 @@ if __name__ == "__main__":
         raise
     except Exception:
         traceback.print_exc()
-        raise SystemExit(2)
+        raise SystemExit(2) from None

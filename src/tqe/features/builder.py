@@ -19,8 +19,9 @@ so a model fitted on ``(X[t], y[t])`` is genuinely predicting forward.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -67,7 +68,7 @@ class FeatureSet:
     def index(self) -> pd.DatetimeIndex:
         return self.X.index
 
-    def slice(self, start=None, end=None) -> "FeatureSet":
+    def slice(self, start=None, end=None) -> FeatureSet:
         """Restrict to a date window, keeping X and y aligned."""
         Xs = self.X.loc[start:end]
         return FeatureSet(Xs, self.y.loc[Xs.index], self.feature_names, self.target_names, dict(self.metadata))

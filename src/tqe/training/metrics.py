@@ -248,10 +248,7 @@ def regression_metrics(y_true: Any, y_pred: Any) -> dict[str, float]:
     sst = float(demeaned @ demeaned)
 
     nz = a != 0.0
-    if nz.any():
-        directional = float(np.mean(np.sign(a[nz]) == np.sign(b[nz])))
-    else:
-        directional = float("nan")
+    directional = float(np.mean(np.sign(a[nz]) == np.sign(b[nz]))) if nz.any() else float("nan")
 
     return {
         "n_obs": float(n),

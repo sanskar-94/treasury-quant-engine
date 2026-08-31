@@ -75,7 +75,7 @@ class BaseModel(ABC):
     # ------------------------------------------------------------------ #
     # Public wrappers that handle labels and validation
     # ------------------------------------------------------------------ #
-    def fit(self, X: np.ndarray | pd.DataFrame, y: np.ndarray | pd.DataFrame | pd.Series) -> "BaseModel":
+    def fit(self, X: np.ndarray | pd.DataFrame, y: np.ndarray | pd.DataFrame | pd.Series) -> BaseModel:
         if isinstance(X, pd.DataFrame):
             self.feature_names_ = list(X.columns)
         if isinstance(y, pd.DataFrame):
@@ -157,7 +157,7 @@ class BaseModel(ABC):
         return path
 
     @classmethod
-    def load(cls, path: str | Path) -> "BaseModel":
+    def load(cls, path: str | Path) -> BaseModel:
         import joblib
 
         obj = joblib.load(Path(path))

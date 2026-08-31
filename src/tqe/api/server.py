@@ -116,6 +116,9 @@ class _State:
         )
 
     def scale(self, rows: pd.DataFrame) -> pd.DataFrame:
+        from ..models.registry import align_to_schema
+
+        rows = align_to_schema(rows, self.model_meta.get("feature_names"))
         if self.scaler is None:
             return rows
         return pd.DataFrame(
@@ -183,7 +186,7 @@ def create_app(cfg: Config | None = None):
         try:
             row = (state.curve.loc[pd.Timestamp(as_of)] if as_of else state.curve.iloc[-1]).dropna()
         except KeyError:
-            raise HTTPException(404, f"no curve observation for {as_of}")
+            raise HTTPException(404, f"no curve observation for {as_of}") from None
         t = np.array([TENOR_YEARS[c] for c in row.index])
         params, rmse = fit_nss(t, row.to_numpy(), model=cfg.curve.model)
         return _json_safe({
@@ -275,8 +278,14 @@ def create_app(cfg: Config | None = None):
         if not state.returns:
             raise HTTPException(503, "returns not loaded")
         from ..data.universe import universe_panel
-        from ..portfolio.risk import (apply_stress, covariance, expected_shortfall,
-                                      historical_var, parametric_var, stress_scenarios)
+        from ..portfolio.risk import (
+            apply_stress,
+            covariance,
+            expected_shortfall,
+            historical_var,
+            parametric_var,
+            stress_scenarios,
+        )
 
         tr = universe_panel(state.returns, "total_return").dropna(how="any").tail(756)
         w = pd.Series(1.0 / tr.shape[1], index=tr.columns)

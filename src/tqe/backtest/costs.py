@@ -199,7 +199,7 @@ class CostModel:
     # construction
     # ------------------------------------------------------------------ #
     @classmethod
-    def from_config(cls, cfg: Any) -> "CostModel":
+    def from_config(cls, cfg: Any) -> CostModel:
         """Build from either a root :class:`~tqe.config.Config` or a ``CostConfig``.
 
         Picks up ``cfg.backtest.slippage_multiplier`` when handed a root config so

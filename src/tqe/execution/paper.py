@@ -42,9 +42,10 @@ with day *t*'s marks before submitting day *t*'s orders.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 import numpy as np
 
@@ -699,7 +700,7 @@ class PaperBroker:
         return True
 
     @classmethod
-    def from_state(cls, path: str | Path, **kwargs: Any) -> "PaperBroker":
+    def from_state(cls, path: str | Path, **kwargs: Any) -> PaperBroker:
         """Construct a broker and immediately restore ``path`` into it."""
         broker = cls(**kwargs)
         broker.restore(path, missing_ok=False)

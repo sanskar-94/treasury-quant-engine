@@ -115,7 +115,7 @@ class OrderSide(str, Enum):
         return 1 if self is OrderSide.BUY else -1
 
     @classmethod
-    def from_signed(cls, quantity: float) -> "OrderSide":
+    def from_signed(cls, quantity: float) -> OrderSide:
         """Side implied by a signed quantity (``>= 0`` is a buy)."""
         return cls.BUY if quantity >= 0 else cls.SELL
 
@@ -245,7 +245,7 @@ class Order:
         order_type: OrderType | str = OrderType.LIMIT,
         limit_price: float | None = None,
         tag: str = "",
-    ) -> "Order":
+    ) -> Order:
         """Convenience constructor with the trade-describing fields first."""
         return cls(
             symbol=symbol,
@@ -265,7 +265,7 @@ class Order:
         order_type: OrderType | str = OrderType.LIMIT,
         limit_price: float | None = None,
         tag: str = "",
-    ) -> "Order":
+    ) -> Order:
         """Build from a signed delta (negative -> SELL), the OMS's natural form."""
         return cls.create(
             symbol,
@@ -337,7 +337,7 @@ class Order:
         self.status = OrderStatus.FILLED if filled >= self.quantity - QTY_EPS else OrderStatus.PARTIAL
         self.touch(when)
 
-    def reject(self, reason: str, when: datetime | None = None) -> "Order":
+    def reject(self, reason: str, when: datetime | None = None) -> Order:
         """Mark the order rejected with a human-readable reason."""
         self.status = OrderStatus.REJECTED
         self.reject_reason = reason
@@ -364,7 +364,7 @@ class Order:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Order":
+    def from_dict(cls, d: dict[str, Any]) -> Order:
         """Inverse of :meth:`to_dict`; tolerates missing optional keys."""
         return cls(
             id=d.get("id") or new_order_id(),
@@ -459,7 +459,7 @@ class Fill:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Fill":
+    def from_dict(cls, d: dict[str, Any]) -> Fill:
         """Inverse of :meth:`to_dict`."""
         return cls(
             order_id=d["order_id"],
@@ -651,7 +651,7 @@ class Position:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "Position":
+    def from_dict(cls, d: dict[str, Any]) -> Position:
         """Inverse of :meth:`to_dict`."""
         return cls(
             symbol=d["symbol"],
@@ -734,7 +734,7 @@ class AccountState:
         }
 
     @classmethod
-    def from_dict(cls, d: dict[str, Any]) -> "AccountState":
+    def from_dict(cls, d: dict[str, Any]) -> AccountState:
         """Inverse of :meth:`to_dict` (derived fields are ignored)."""
         return cls(
             cash=float(d["cash"]),

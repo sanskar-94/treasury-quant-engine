@@ -3,11 +3,22 @@
 from .base import BaseModel
 from .ensemble import AverageEnsemble, BestModelSelector, StackedEnsemble
 from .linear import (
-    ARBaselineModel, ElasticNetModel, LassoModel, OLSModel, RidgeModel, ZeroModel,
+    ARBaselineModel,
+    ElasticNetModel,
+    LassoModel,
+    OLSModel,
+    RidgeModel,
+    ZeroModel,
 )
 from .registry import (
-    MODEL_REGISTRY, available_models, build_ensemble, create_model,
-    latest_bundle, load_bundle, register, save_bundle,
+    MODEL_REGISTRY,
+    available_models,
+    build_ensemble,
+    create_model,
+    latest_bundle,
+    load_bundle,
+    register,
+    save_bundle,
 )
 from .trees import ExtraTreesModel, GBMModel, RandomForestModel
 

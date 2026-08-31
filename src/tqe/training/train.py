@@ -41,7 +41,7 @@ from ..logging_utils import get_logger
 from ..models.base import BaseModel
 from ..models.registry import build_ensemble, save_bundle
 from .metrics import regression_metrics
-from .splits import Split, describe_splits, validate_splits, walk_forward_splits
+from .splits import Split, validate_splits, walk_forward_splits
 
 log = get_logger("training.train")
 

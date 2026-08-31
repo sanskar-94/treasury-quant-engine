@@ -113,8 +113,8 @@ class BacktestResult:
 
 
 def _bucket_map(tenors) -> dict[str, str]:
-    from ..data.universe import bucket_for_years
     from ..data.sources import TENOR_YEARS
+    from ..data.universe import bucket_for_years
 
     return {t: bucket_for_years(TENOR_YEARS.get(t, 10.0)) for t in tenors}
 

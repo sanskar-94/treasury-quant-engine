@@ -24,9 +24,9 @@ bond-equivalent yield with the Treasury's own coupon-equivalent formula.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Callable, Iterable, Sequence
 
 import numpy as np
 

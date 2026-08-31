@@ -30,7 +30,7 @@ and never produces the saw-toothed forward curve that linear-on-zeros gives.
 
 from __future__ import annotations
 
-from typing import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 
 import numpy as np
 import pandas as pd

@@ -129,7 +129,13 @@ def cmd_data_status(args: argparse.Namespace) -> int:
 # curve
 # --------------------------------------------------------------------------- #
 def cmd_curve_fit(args: argparse.Namespace) -> int:
-    from .curve import bootstrap_history, fit_curve_pca, fit_nss, fit_nss_history_fixed, rolling_pca_factors
+    from .curve import (
+        bootstrap_history,
+        fit_curve_pca,
+        fit_nss,
+        fit_nss_history_fixed,
+        rolling_pca_factors,
+    )
     from .data.sources import TENOR_YEARS
 
     cfg = _cfg_from_args(args)
@@ -286,7 +292,12 @@ def cmd_predict(args: argparse.Namespace) -> int:
         raise SystemExit("No model bundle found. Run `tqe train` first.")
     model, scaler, meta = load_bundle(bundle_path)
 
-    X = _require(_p(cfg, "X.parquet"), "tqe features build")
+    from .models.registry import align_to_schema
+
+    X = align_to_schema(
+        _require(_p(cfg, "X.parquet"), "tqe features build"),
+        meta.get("feature_names") or model.feature_names_,
+    )
     row = X.loc[[pd.Timestamp(args.date)]] if args.date else X.tail(1)
 
     Xs = row
@@ -297,11 +308,53 @@ def cmd_predict(args: argparse.Namespace) -> int:
         )
     pred = model.predict_frame(Xs)
     asof = row.index[-1].date()
-    print(f"model     {bundle_path}")
-    print(f"features  as of {asof} (predicting the next session)")
-    print("\npredicted return by tenor:")
-    for tenor, value in pred.iloc[0].items():
-        print(f"  {tenor:8s} {value * 1e4:+8.3f} bp")
+
+    # The raw ensemble output is heavily shrunk (its NNLS weights sum to ~0.003),
+    # so printing it alone shows a column of zeros. What actually drives trading
+    # is the standardised signal, so compute it over recent history and show both.
+    from .data.universe import universe_panel
+    from .signals.alpha import predictions_to_signal, scale_to_return_units
+
+    hist = X.tail(min(len(X), 512))
+    hist_s = hist
+    if scaler is not None:
+        hist_s = pd.DataFrame(
+            np.nan_to_num(scaler.transform(hist.to_numpy(dtype=float))),
+            index=hist.index, columns=hist.columns,
+        )
+    pred_hist = model.predict_frame(hist_s)
+    signal = predictions_to_signal(
+        pred_hist, "vol_scale", 252, cfg.portfolio.signal_clip, cfg.portfolio.min_signal_to_trade
+    )
+
+    _, returns = _load_returns(cfg)
+    tr = universe_panel(returns, "total_return").reindex(pred_hist.index)
+    mu = scale_to_return_units(pred_hist, tr, ic=0.05, window=252)
+
+    print(f"model      {bundle_path}")
+    print(f"features   as of {asof}  (forecasting the next session)")
+    print(f"trained    {meta.get('saved_at', 'unknown')}  git {meta.get('git_sha', '?')}")
+    print()
+    print(f"  {'tenor':<8} {'raw':>12} {'expected':>11} {'signal':>8}  view")
+    print(f"  {'':<8} {'':>12} {'return (bp)':>11} {'':>8}")
+    print("  " + "-" * 52)
+    latest_sig = signal.iloc[-1] if len(signal) else pred.iloc[0] * 0
+    latest_mu = mu.iloc[-1] if len(mu) else pred.iloc[0] * 0
+    for tenor in pred.columns:
+        raw = float(pred.iloc[0][tenor])
+        e_ret = float(latest_mu.get(tenor, float("nan"))) * 1e4
+        sig = float(latest_sig.get(tenor, float("nan")))
+        if not np.isfinite(sig) or abs(sig) < cfg.portfolio.min_signal_to_trade:
+            view = "flat"
+        else:
+            view = "LONG " + "+" * min(int(abs(sig)) + 1, 3) if sig > 0 else \
+                   "SHORT " + "-" * min(int(abs(sig)) + 1, 3)
+        print(f"  {tenor:<8} {raw:12.3e} {e_ret:+11.3f} {sig:+8.2f}  {view}")
+
+    active = int((latest_sig.abs() >= cfg.portfolio.min_signal_to_trade).sum())
+    print(f"\n  {active}/{len(pred.columns)} tenors above the {cfg.portfolio.min_signal_to_trade} "
+          f"trading threshold")
+    print("  (raw = ensemble output; expected return rescales it to real return units)")
     return 0
 
 
@@ -338,7 +391,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     try:
         import uvicorn
     except ImportError:
-        raise SystemExit("uvicorn is not installed. pip install 'tqe[api]'")
+        raise SystemExit("uvicorn is not installed. pip install 'tqe[api]'") from None
     from .api.server import create_app
 
     uvicorn.run(create_app(cfg), host=args.host, port=args.port, log_level=cfg.log_level.lower())

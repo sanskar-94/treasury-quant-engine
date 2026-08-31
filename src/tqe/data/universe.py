@@ -72,9 +72,9 @@ cashflow grid per tenor.  The full 9,172 x 9 panel builds in ~1 second.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Sequence
 
 import numpy as np
 import pandas as pd

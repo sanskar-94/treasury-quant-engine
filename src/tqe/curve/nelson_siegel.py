@@ -60,8 +60,9 @@ is not path-dependent beyond the last digits of the polish.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -376,7 +377,7 @@ class NSSParams:
         )
 
     @classmethod
-    def from_array(cls, arr: Sequence[float] | np.ndarray) -> "NSSParams":
+    def from_array(cls, arr: Sequence[float] | np.ndarray) -> NSSParams:
         """Inverse of :meth:`as_array`."""
         a = np.asarray(arr, dtype=float).ravel()
         if a.size != 6:
@@ -908,13 +909,13 @@ def fit_nss_history(
 
 
 def fit_nss_history_fixed(
-    curve: "pd.DataFrame",
-    tenor_years: "Mapping[str, float] | None" = None,
+    curve: pd.DataFrame,
+    tenor_years: Mapping[str, float] | None = None,
     model: str = "svensson",
     tau1: float = DIEBOLD_LI_TAU1,
     tau2: float = SVENSSON_FIXED_TAU2,
     **kwargs: Any,
-) -> "pd.DataFrame":
+) -> pd.DataFrame:
     """Fit the whole history with the decay parameters held fixed.
 
     This is the variant you want when the betas will be used as machine-learning

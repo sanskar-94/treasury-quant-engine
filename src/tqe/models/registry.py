@@ -14,9 +14,12 @@ state that was never versioned.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any
+
+import pandas as pd
 
 from ..config import ModelConfig
 from ..logging_utils import get_logger
@@ -28,6 +31,7 @@ from .trees import ExtraTreesModel, GBMModel, RandomForestModel
 log = get_logger("models.registry")
 
 __all__ = [
+    "align_to_schema",
     "MODEL_REGISTRY",
     "register",
     "create_model",
@@ -209,3 +213,68 @@ def _git_sha() -> str:
         ).strip()
     except Exception:  # noqa: BLE001 - absence of git is not an error
         return "unknown"
+
+
+def align_to_schema(
+    X: pd.DataFrame,
+    feature_names: Sequence[str] | None,
+    strict: bool = True,
+) -> pd.DataFrame:
+    """Project a freshly-built design matrix onto a model's training schema.
+
+    This exists because of a specific production failure. The live runner
+    rebuilds features from scratch each session, and the feature *count* is not
+    stable across runs: it depends on which macro series were reachable when the
+    data was last pulled, and on the coverage threshold that drops sparse
+    columns. A session that recovered two extra FRED series produced 489
+    features against a scaler fitted on 482, and inference died with
+
+        ValueError: X has 489 features, but RobustScaler is expecting 482
+
+    Dying was the good outcome. The dangerous version of this bug is a matrix
+    with the *same* width but a different column order, which scales and predicts
+    happily and silently returns nonsense.
+
+    So the schema travels with the model bundle and every inference path passes
+    through here first:
+
+    * extra columns are dropped (a new feature upstream must not break a
+      deployed model),
+    * missing columns raise when ``strict``, because a model asked to predict
+      without a feature it was fitted on has no defensible answer.
+
+    Parameters
+    ----------
+    X:
+        Freshly built features.
+    feature_names:
+        The training schema, from the bundle metadata or ``model.feature_names_``.
+    strict:
+        Raise on missing features rather than filling them with zeros.
+
+    Returns
+    -------
+    pd.DataFrame
+        ``X`` restricted and reordered to ``feature_names``.
+    """
+    if not feature_names:
+        return X
+
+    missing = [c for c in feature_names if c not in X.columns]
+    if missing:
+        msg = (
+            f"{len(missing)} feature(s) present at training time are missing now "
+            f"(first few: {missing[:5]}). The model cannot predict without them."
+        )
+        if strict:
+            raise ValueError(msg)
+        log.warning("%s Filling with 0.0.", msg)
+        X = X.copy()
+        for c in missing:
+            X[c] = 0.0
+
+    extra = [c for c in X.columns if c not in feature_names]
+    if extra:
+        log.info("dropping %d feature(s) the model was not trained on", len(extra))
+
+    return X[list(feature_names)]

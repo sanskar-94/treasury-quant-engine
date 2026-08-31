@@ -132,7 +132,11 @@ class LiveRunner:
     def predict(self, fs, as_of: pd.Timestamp | None = None) -> pd.Series:
         """Forecast for the session following ``as_of``."""
         self._load_model()
-        X = fs.X
+        from ..models.registry import align_to_schema
+
+        # Features are rebuilt from scratch each session and their count is not
+        # guaranteed stable, so project onto the bundle's schema before scaling.
+        X = align_to_schema(fs.X, self._meta.get("feature_names") or self._model.feature_names_)
         row = X.loc[[as_of]] if as_of is not None and as_of in X.index else X.tail(1)
         if self._scaler is not None:
             row = pd.DataFrame(
@@ -203,7 +207,11 @@ class LiveRunner:
 
         # The signal scaler needs history, so rebuild the prediction series over
         # the recent past using the same model, then take the last row.
-        hist = fs.X.tail(min(len(fs), 512))
+        from ..models.registry import align_to_schema as _align
+
+        hist = _align(
+            fs.X, self._meta.get("feature_names") or self._model.feature_names_
+        ).tail(min(len(fs), 512))
         if self._scaler is not None:
             hist_s = pd.DataFrame(
                 np.nan_to_num(self._scaler.transform(hist.to_numpy(dtype=float))),

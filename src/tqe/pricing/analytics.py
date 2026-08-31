@@ -18,9 +18,9 @@ test-suite; it is the standard sanity check that a KRD implementation is right.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
-from typing import Callable, Sequence
 
 import numpy as np
 

@@ -25,9 +25,10 @@ import os
 import re
 import shutil
 import time
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 import pandas as pd
 
