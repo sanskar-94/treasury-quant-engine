@@ -257,8 +257,9 @@ def cmd_backtest(args: argparse.Namespace) -> int:
         preds, method=args.signal_method, window=args.signal_window,
         clip=cfg.portfolio.signal_clip, min_abs=cfg.portfolio.min_signal_to_trade,
     )
-    if args.decay and args.decay > 0:
-        signal = signal_decay(signal, halflife=args.decay)
+    halflife = args.decay if args.decay and args.decay > 0 else cfg.portfolio.signal_halflife
+    if halflife and halflife > 0:
+        signal = signal_decay(signal, halflife=halflife)
 
     bench = buy_and_hold(tr, cfg.backtest.benchmark, signal.index)
     result = run_backtest(
@@ -353,7 +354,7 @@ def cmd_pipeline(args: argparse.Namespace) -> int:
         ("train", cmd_train, {"learners": None, "out": None}),
         ("backtest", cmd_backtest, {
             "start": None, "end": None, "no_costs": False, "out": None,
-            "signal_method": "zscore", "signal_window": 252, "decay": 0.0,
+            "signal_method": "vol_scale", "signal_window": 252, "decay": 0.0,
             "n_trials": 1, "no_plots": False,
         }),
     ]:
@@ -417,7 +418,7 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--end")
     b.add_argument("--no-costs", action="store_true", help="run gross of transaction costs")
     b.add_argument("--out", help="report output directory")
-    b.add_argument("--signal-method", default="zscore", choices=["zscore", "vol_scale", "rank", "raw"])
+    b.add_argument("--signal-method", default="vol_scale", choices=["zscore", "vol_scale", "rank", "raw"])
     b.add_argument("--signal-window", type=int, default=252)
     b.add_argument("--decay", type=float, default=0.0, help="signal smoothing half-life in days")
     b.add_argument("--n-trials", type=int, default=1,

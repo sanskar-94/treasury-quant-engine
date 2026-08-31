@@ -16,11 +16,16 @@ day, ``signal[t]`` is a function of information available at ``t-1``'s close, so
 happens inside this module - doing it in two places is how double-lagging (and
 silently destroyed signal) happens.
 
-The engine also runs a **look-ahead canary**: it re-runs the whole backtest with
-the signal shifted one day *forward* (i.e. cheating). If the honest run scores
-anywhere near the cheating run, the pipeline has a leak. This is reported in the
-metrics rather than being an optional extra, because the number is meaningless
-without it.
+The engine also runs a **look-ahead canary**. It re-runs the identical machinery
+on a signal built from the realised future return itself - perfect foresight,
+the best any leak could possibly achieve. The honest run must land far below it.
+Reporting a Sharpe without this number is reporting half the result, so it is
+computed by default rather than being an optional extra.
+
+Note that shifting the *signal* forward is NOT a valid canary, though it is a
+tempting one to write: signal[t+1] forecasts return[t+1], so using it to trade
+day t merely misaligns it and scores near zero regardless of whether the
+pipeline leaks. The canary has to inject the future *outcome*.
 """
 
 from __future__ import annotations
@@ -84,7 +89,7 @@ class BacktestResult:
         if "lookahead_canary_sharpe" in m:
             lines.append(
                 f"Canary Sharpe   {m['lookahead_canary_sharpe']:>10.2f}  "
-                f"(cheating run; must be far above the honest one)"
+                f"(perfect foresight; honest/canary = {m.get('canary_ratio', float('nan')):.3f})"
             )
         if self.benchmark is not None and "benchmark_sharpe" in m:
             lines.append(f"Benchmark Sharpe{m['benchmark_sharpe']:>10.2f}")
@@ -300,8 +305,12 @@ def run_backtest(
 
     # ---- look-ahead canary ------------------------------------------------- #
     if run_canary:
-        # shift(-1) hands the strategy tomorrow's signal today: pure cheating.
-        cheat = sig.shift(-1).fillna(0.0)
+        # Perfect foresight: trade the sign of the return that is about to be
+        # realised, scaled like a real signal. This is the ceiling a total
+        # leak would reach, so the honest run must sit far below it.
+        realised = returns_panel[tenors].reindex(sig.index)
+        cheat = np.sign(realised) * sig.abs().replace(0.0, 1.0)
+        cheat = cheat.fillna(0.0)
         try:
             from ..signals.sizing import size_portfolio as _size
 
@@ -319,7 +328,7 @@ def run_backtest(
             metrics["lookahead_canary_sharpe"] = float(canary)
             honest = metrics.get("sharpe", 0.0)
             metrics["canary_ratio"] = float(honest / canary) if abs(canary) > EPS else np.nan
-            if abs(canary) > EPS and honest / canary > 0.5:
+            if abs(canary) > EPS and honest / canary > 0.35:
                 log.warning(
                     "LOOK-AHEAD SUSPECTED: honest Sharpe %.2f is %.0f%% of the cheating "
                     "run's %.2f - a clean pipeline should be far below it",

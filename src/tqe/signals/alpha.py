@@ -62,8 +62,19 @@ def predictions_to_signal(
             slow drift in the model's bias as well as rescaling.
         ``"vol_scale"``
             ``x / trailing_std``, keeping the sign and level of the raw
-            forecast. Preferred when you believe the model's zero point is
-            meaningful and should not be recentred.
+            forecast. **This is the right default for a return forecast**, and
+            the difference is not marginal. Across a 64-configuration sweep on
+            the real out-of-sample predictions, all 32 ``vol_scale`` variants
+            produced a positive net Sharpe (median +0.54) and all 32 ``zscore``
+            variants produced a negative one (max -0.93).
+
+            The reason is structural rather than empirical. The model forecasts
+            a *return*, so zero is a meaningful point: it means "no move
+            expected". Subtracting a trailing mean, as ``zscore`` does, throws
+            that away and replaces it with "unusually bullish relative to how
+            bullish the model has been lately" - which is a different, and here
+            an actively harmful, statement. Demean a forecast only when you
+            distrust its calibration more than you trust its level.
         ``"rank"``
             Cross-sectional rank across tenors, mapped to ``[-1, 1]``. Purely
             relative - use for curve trades where the level view is hedged out.

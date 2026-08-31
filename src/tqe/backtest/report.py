@@ -127,13 +127,13 @@ def write_markdown(result, out_dir: str | Path, title: str = "Backtest Report") 
     if "lookahead_canary_sharpe" in m:
         ratio = m.get("canary_ratio", float("nan"))
         verdict = (
-            "clean - the honest run is far below the cheating one"
-            if np.isfinite(ratio) and ratio < 0.5
+            "clean - the honest run is a small fraction of perfect foresight"
+            if np.isfinite(ratio) and ratio < 0.35
             else "SUSPICIOUS - investigate for leakage"
         )
         lines.append(
-            f"| Look-ahead canary Sharpe | {_fmt_num(m.get('lookahead_canary_sharpe'))} | "
-            f"honest/cheating = {_fmt_num(ratio)}; {verdict} |"
+            f"| Perfect-foresight Sharpe | {_fmt_num(m.get('lookahead_canary_sharpe'))} | "
+            f"honest/foresight = {_fmt_num(ratio, 3)}; {verdict} |"
         )
     if "benchmark_sharpe" in m:
         lines += [

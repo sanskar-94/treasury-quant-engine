@@ -54,6 +54,8 @@ class AverageEnsemble(BaseModel):
     def _fit(self, X: np.ndarray, y: np.ndarray) -> None:
         for m in self.models:
             m.fit(X, y)
+            m.feature_names_ = self.feature_names_
+            m.target_names_ = self.target_names_
 
     def _predict(self, X: np.ndarray) -> np.ndarray:
         preds = [m.predict(X) for m in self.models]
@@ -150,6 +152,12 @@ class StackedEnsemble(BaseModel):
         # --- stage 2a: refit base models on everything ---
         for m in self.models:
             m.fit(X, y)
+            # Base models are fitted on bare arrays inside the stack, so they
+            # never see the column labels. Propagate them, otherwise every
+            # feature-importance report comes back as f0, f1, f2 ... and is
+            # useless for actually understanding the model.
+            m.feature_names_ = self.feature_names_
+            m.target_names_ = self.target_names_
 
         # --- stage 2b: meta-learner on the OOF matrix ---
         if mask.sum() < 50:
@@ -248,6 +256,8 @@ class BestModelSelector(BaseModel):
             log.info("best model by OOF RMSE: %s (%s)", best_name,
                      {k: round(v, 8) for k, v in self.scores_.items()})
         self.best_.fit(X, y)
+        self.best_.feature_names_ = self.feature_names_
+        self.best_.target_names_ = self.target_names_
 
     def _predict(self, X: np.ndarray) -> np.ndarray:
         if self.best_ is None:

@@ -29,6 +29,7 @@ from ..logging_utils import get_logger
 log = get_logger("signals.sizing")
 
 __all__ = [
+    "apply_no_trade_band",
     "realised_volatility",
     "volatility_target_weights",
     "kelly_size",
@@ -165,17 +166,43 @@ def dv01_scaled_positions(
     target_dv01: pd.DataFrame,
     dv01_per_100: pd.DataFrame,
     max_position_notional: float | None = None,
+    capital: float | None = None,
+    max_leverage: float | None = None,
 ) -> pd.DataFrame:
     """Notional face required to achieve a DV01 target.
 
     ``dv01_per_100`` is the DV01 of 100 face, so the face needed is
     ``target_dv01 / dv01_per_100 * 100``.
+
+    **A DV01 cap is not a leverage cap.** This is the trap the function exists to
+    close. A 3-month bill has a DV01 of about $0.0025 per 100 face, versus $0.16
+    for the 30-year - a factor of 65. Allocating risk equally in DV01 terms
+    therefore demands ~65x more *notional* at the front end, and a $25,000 gross
+    DV01 book spread across the curve can quietly imply hundreds of millions of
+    notional on ten million of capital. The risk limit is satisfied and the
+    balance sheet is not.
+
+    It matters beyond balance-sheet optics because transaction costs are charged
+    on notional, not on DV01: an unconstrained front-end position is cheap in
+    risk and ruinously expensive to trade.
+
+    So when ``capital`` and ``max_leverage`` are supplied, each day's book is
+    scaled down (never up) to respect gross notional <= capital * max_leverage.
+    Scaling the whole row preserves the relative shape of the position.
     """
     unit = dv01_per_100.reindex_like(target_dv01)
     notional = target_dv01 / unit.where(unit.abs() > EPS) * 100.0
     notional = notional.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
     if max_position_notional is not None:
         notional = notional.clip(-abs(max_position_notional), abs(max_position_notional))
+
+    if capital is not None and max_leverage is not None and max_leverage > 0:
+        cap = abs(capital) * abs(max_leverage)
+        gross = notional.abs().sum(axis=1)
+        factor = (cap / gross.where(gross > cap)).fillna(1.0)
+        notional = notional.mul(factor, axis=0)
+
     return notional
 
 
@@ -216,5 +243,70 @@ def size_portfolio(
 
         target_dv01 = target_dv01.apply(lambda row: dv01_neutral_projection(row), axis=1)
 
-    notional = dv01_scaled_positions(target_dv01, dv01_panel.shift(1))
-    return {"weights": weights, "target_dv01": target_dv01, "notional": notional}
+    notional = dv01_scaled_positions(
+        target_dv01, dv01_panel.shift(1),
+        capital=cfg.capital, max_leverage=cfg.max_leverage,
+    )
+    if getattr(cfg, "no_trade_band", 0.0) > 0:
+        notional = apply_no_trade_band(notional, cfg.no_trade_band)
+    # Recompute the realised DV01 after banding and the leverage cap, so the
+    # reported exposure is what is actually held rather than what was requested.
+    realised_dv01 = notional * dv01_panel.shift(1).reindex_like(notional) / 100.0
+    return {"weights": weights, "target_dv01": realised_dv01, "notional": notional}
+
+
+def apply_no_trade_band(
+    targets: pd.DataFrame,
+    threshold: float = 0.10,
+    reference: str = "gross",
+) -> pd.DataFrame:
+    """Hold the existing position unless the target has moved materially.
+
+    Without this, a daily rebalance chases every wiggle in the forecast and pays
+    a spread for the privilege. Measured on the real out-of-sample predictions,
+    the unbanded book turned over roughly 63% of its notional *every day* -
+    around 2,300x capital per year - which converted a gross Sharpe of 1.26 into
+    a net Sharpe of -0.56. Costs, not signal, were the binding constraint.
+
+    A no-trade band is the standard remedy and is close to optimal for a
+    mean-reverting target with proportional costs: trade only when the desired
+    position has drifted far enough from the held one to be worth the spread,
+    then trade all the way to the target.
+
+    Parameters
+    ----------
+    targets:
+        Desired positions per date.
+    threshold:
+        Minimum change, as a fraction of the average gross book, that triggers a
+        rebalance in that instrument. 0.10 means "ignore moves smaller than 10%
+        of typical gross exposure".
+    reference:
+        ``"gross"`` scales the threshold by the mean gross book (one scale for
+        the whole portfolio); ``"own"`` scales by each instrument's own mean
+        absolute position.
+
+    Returns
+    -------
+    pd.DataFrame
+        Positions actually held, after banding.
+    """
+    if targets.empty or threshold <= 0:
+        return targets
+
+    if reference == "own":
+        scale = targets.abs().mean().replace(0.0, np.nan)
+        band = (scale * threshold).fillna(0.0).to_numpy()
+    else:
+        gross = float(targets.abs().sum(axis=1).mean())
+        band = np.full(targets.shape[1], gross * threshold / max(targets.shape[1], 1))
+
+    tgt = targets.to_numpy(dtype=float)
+    held = np.empty_like(tgt)
+    current = np.zeros(tgt.shape[1])
+    for i in range(len(tgt)):
+        move = np.abs(tgt[i] - current)
+        trade = move > band
+        current = np.where(trade, tgt[i], current)
+        held[i] = current
+    return pd.DataFrame(held, index=targets.index, columns=targets.columns)

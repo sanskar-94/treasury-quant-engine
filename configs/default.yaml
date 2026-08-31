@@ -78,7 +78,9 @@ portfolio:
   dv01_neutral: false
   turnover_penalty: 2.0     # multiple of the modelled transaction cost
   signal_clip: 3.0
-  min_signal_to_trade: 0.15
+  min_signal_to_trade: 0.10
+  no_trade_band: 0.50       # rebalance only on material drift (turnover control)
+  signal_halflife: 0.0      # smoothing costs more edge than it saves in costs here
   vol_lookback: 63
   kelly_fraction: 0.25
 

@@ -199,7 +199,14 @@ class PortfolioConfig:
     # are optimistic.  See portfolio/optimizer.py for why the units matter.
     turnover_penalty: float = 2.0
     signal_clip: float = 3.0
-    min_signal_to_trade: float = 0.15
+    min_signal_to_trade: float = 0.10
+    # Fraction of the average gross book a target must move before it is traded.
+    # The single most effective turnover control in the system - see
+    # signals/sizing.apply_no_trade_band for the measured impact.
+    no_trade_band: float = 0.50
+    # Exponential half-life applied to the signal, in days. Damps day-to-day
+    # forecast noise before it becomes turnover.
+    signal_halflife: float = 0.0
     rebalance: str = "daily"  # daily | weekly
     vol_lookback: int = 63
     kelly_fraction: float = 0.25
