@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# Data & artifacts (regenerate with `tqe data pull`)
+data/raw/*
+data/processed/*
+data/cache/*
+!data/**/.gitkeep
+artifacts/models/*
+artifacts/backtests/*
+artifacts/reports/*
+!artifacts/**/.gitkeep
+
+# Live trading state & secrets
+.env
+.env.*
+!.env.example
+state/
+logs/
+*.log
+secrets.yaml
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+.ipynb_checkpoints/

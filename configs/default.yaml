@@ -1,0 +1,109 @@
+# Treasury Quant Engine - default configuration
+#
+# Every key here maps to a dataclass field in src/tqe/config.py.  Unknown keys
+# raise at start-up rather than being silently ignored, so a typo cannot quietly
+# change trading behaviour.
+#
+# Override precedence:  defaults < this file < TQE_* env vars < `--set k=v`
+
+log_level: INFO
+seed: 42
+
+data:
+  data_dir: data
+  start_date: "1990-01-02"
+  end_date: null            # null -> today
+  cache_days: 1
+  request_timeout: 45
+  max_retries: 5
+  # Tenors with continuous coverage back to 1990 - the modelling universe.
+  core_tenors: ["3 Mo", "6 Mo", "1 Yr", "2 Yr", "3 Yr", "5 Yr", "7 Yr", "10 Yr", "30 Yr"]
+
+curve:
+  model: svensson           # svensson (4 betas) | nelson_siegel (3 betas)
+  n_pca_factors: 3
+  max_fit_iter: 400
+
+features:
+  feature_lag: 1            # features are t-1 information; do not lower this
+  include_macro: true
+  include_pca: true
+  include_curve_shape: true
+  include_carry_rolldown: true
+  include_regime: true
+  momentum_windows: [1, 5, 10, 21, 63, 126, 252]
+  vol_windows: [10, 21, 63, 252]
+  zscore_windows: [21, 63, 252]
+
+model:
+  target: price_return      # price_return | yield_change | direction
+  horizon: 1
+  learners: [ridge, elasticnet, random_forest, gbm, ar_baseline]
+  ensemble: stacked
+  use_torch_lstm: false
+  gbm_max_iter: 400
+  gbm_learning_rate: 0.03
+  gbm_max_depth: 4
+  random_state: 42
+
+training:
+  scheme: walk_forward
+  n_splits: 8
+  test_size: 252            # one out-of-sample trading year per fold
+  min_train_size: 1260      # five years before the first prediction is made
+  embargo: 5                # business days purged between train and test
+  expanding: true
+  standardize: true
+
+costs:
+  # Half-spreads in 32nds of a point.  On-the-run 10y trades ~0.5/32 half-spread.
+  half_spread_32nds:
+    bill: 0.10
+    2y: 0.25
+    5y: 0.35
+    10y: 0.50
+    30y: 1.00
+  impact_coefficient: 0.15
+  repo_spread_bp: 5.0
+  commission_per_million: 12.5
+
+portfolio:
+  capital: 10000000.0
+  target_annual_vol: 0.06
+  max_leverage: 4.0
+  max_gross_dv01: 25000.0
+  max_net_dv01: 15000.0
+  max_weight_per_tenor: 0.5
+  dv01_neutral: false
+  turnover_penalty: 5.0
+  signal_clip: 3.0
+  min_signal_to_trade: 0.15
+  vol_lookback: 63
+  kelly_fraction: 0.25
+
+backtest:
+  initial_capital: 10000000.0
+  include_costs: true
+  include_financing: true
+  slippage_multiplier: 1.0
+  benchmark: "10 Yr"
+  risk_free_series: "3 Mo"
+
+risk:
+  max_order_notional: 2000000.0
+  max_position_notional: 20000000.0
+  max_daily_loss_pct: 0.03
+  max_drawdown_pct: 0.15
+  var_confidence: 0.99
+  var_limit_pct: 0.025
+  max_orders_per_day: 50
+  kill_switch: false
+  require_market_open: true
+
+execution:
+  broker: paper             # paper | alpaca
+  order_type: limit
+  limit_offset_bp: 1.0
+  time_in_force: day
+  state_dir: state
+  dry_run: true             # live trading requires an explicit --live flag
