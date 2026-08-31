@@ -1,8 +1,22 @@
 # Architecture & Module Contracts
 
 This document is the single source of truth for the public API of every module in
-`src/tqe`. It is written before the modules so that layers can be built and
-tested independently and still compose.
+`src/tqe`. It was written *before* the modules, as a contract, so that layers
+could be built and tested independently and still compose. Everything specified
+here is now implemented; where the implementation diverged from the original
+plan the divergence is noted inline and the reason is recorded in the module's
+own docstring.
+
+**Divergences worth knowing about:**
+
+| Contract said | What was built | Why |
+| --- | --- | --- |
+| `fit_nss_history` for features | `fit_nss_history_fixed` (Diebold-Li fixed decays) | free-tau betas are not identifiable; beta3 sd 1.65 vs 0.031 |
+| bootstrap solves `DF_T` in closed form | bisection on each tenor's own zero rate | closed form flat-extrapolates between sparse nodes, biasing the 20y by 38bp |
+| `predictions_to_signal(method="zscore")` default | `vol_scale` default | demeaning a return forecast destroys its zero point; 32/32 configs positive vs 0/32 |
+| turnover penalty as a raw coefficient | multiplier on cost, amortised over the holding period | a raw coefficient is four orders of magnitude off daily returns and returns an empty book |
+| canary = signal shifted forward | canary = realised future return | shifting the signal only misaligns it and proves nothing |
+| DV01 caps only | DV01 caps **and** a gross-notional leverage cap | a DV01 limit permitted 14.9x leverage via the front end |
 
 ## 0. Conventions that hold everywhere
 
@@ -38,7 +52,7 @@ starts 1993-10-01, and `30 Yr` has a genuine publication gap from 2002-02 to
 
 ---
 
-## 2. `tqe.pricing` — DONE (do not modify)
+## 2. `tqe.pricing` — implemented
 
 ```python
 # daycount.py
@@ -97,7 +111,7 @@ portfolio_dv01(positions: dict[str, float], dv01_per_unit: dict[str, float]) -> 
 hedge_ratio(target_dv01, hedge_dv01) -> float
 ```
 
-## 3. `tqe.data` — `sources.py` and `calendar.py` DONE
+## 3. `tqe.data` — implemented
 
 ```python
 # sources.py
@@ -118,7 +132,7 @@ annualization_factor(index) -> float
 holidays_for_year(year) -> frozenset[date]
 ```
 
-### 3a. `data/universe.py` — TO BUILD
+### 3a. `data/universe.py`
 
 Turns the CMT par-yield series into **investable instruments with total
 returns**. This is the bridge from "a yield went from 4.70% to 4.73%" to "the
@@ -171,13 +185,13 @@ def butterfly_weights(short_dv01, belly_dv01, long_dv01) -> tuple[float, float, 
     """50/50 DV01-neutral fly weights (short, belly, long); belly is +1 unit."""
 ```
 
-### 3b. `data/cache.py` — TO BUILD
+### 3b. `data/cache.py`
 Small Parquet cache helper: `save_frame(df, path)`, `load_frame(path)`,
 `cached(key, builder, cache_dir, max_age_days=None)`, `clear_cache(cache_dir)`.
 
 ---
 
-## 4. `tqe.curve` — TO BUILD
+## 4. `tqe.curve`
 
 ```python
 # nelson_siegel.py
@@ -260,7 +274,7 @@ def rolling_pca_factors(changes: pd.DataFrame, window=252, n_factors=3) -> pd.Da
 
 ---
 
-## 5. `tqe.features` — TO BUILD
+## 5. `tqe.features`
 
 ```python
 # builder.py
@@ -306,7 +320,7 @@ def regime_features(curve, returns, n_states=3, window=252) -> pd.DataFrame
 
 ---
 
-## 6. `tqe.models` and `tqe.training` — TO BUILD
+## 6. `tqe.models` and `tqe.training`
 
 ```python
 # models/base.py
@@ -373,7 +387,7 @@ def train_final_model(fs: FeatureSet, cfg) -> TrainResult   # fit on ALL data fo
 
 ---
 
-## 7. `tqe.signals`, `tqe.portfolio`, `tqe.backtest` — TO BUILD
+## 7. `tqe.signals`, `tqe.portfolio`, `tqe.backtest`
 
 ```python
 # signals/alpha.py
@@ -445,7 +459,7 @@ def run_backtest(signals, returns_panel, dv01_panel, cfg, cost_model=None,
 
 ---
 
-## 8. `tqe.execution` and `tqe.live` — TO BUILD
+## 8. `tqe.execution` and `tqe.live`
 
 ```python
 # execution/broker.py
@@ -511,7 +525,7 @@ class LiveRunner:
 
 ---
 
-## 9. `tqe.cli` and `tqe.api` — TO BUILD
+## 9. `tqe.cli` and `tqe.api`
 
 ```
 tqe data pull [--force] [--start YEAR]
@@ -547,3 +561,23 @@ from its own output:
 * walk-forward splits never overlap and always respect the embargo,
 * a backtest fed a signal shifted forward in time must produce a *worse* Sharpe
   than the correctly-lagged one (the look-ahead canary).
+
+
+---
+
+## 11. Implementation status
+
+| Module | Status | Tests |
+| --- | --- | --- |
+| `pricing/` | complete | 101 |
+| `curve/` | complete | 37 |
+| `data/` | complete | covered via universe/backtest |
+| `features/` | complete | 35 |
+| `models/`, `training/` | complete | 62 |
+| `signals/`, `portfolio/` | complete | covered via backtest + smoke |
+| `backtest/` | complete | in `test_training.py` |
+| `execution/` | complete (paper + Alpaca) | 25 |
+| `live/`, `api/`, `cli.py` | complete | smoke test + manual |
+
+260 tests, plus a 45-check end-to-end smoke test on synthetic data
+(`scripts/smoke_test.py`) that needs no network and runs in about a minute.
