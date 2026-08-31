@@ -28,6 +28,9 @@ artifacts/backtests/*
 artifacts/reports/*
 !artifacts/**/.gitkeep
 
+# `results/` is the published run - deliberately tracked so the outcome can be
+# read on GitHub without regenerating it.
+
 # Live trading state & secrets
 .env
 .env.*

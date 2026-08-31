@@ -42,7 +42,7 @@ and the book is invested on 96.9% of days.
 
 | Check | Value | Reading |
 | --- | ---: | --- |
-| Configurations searched | 64 | every one is in `artifacts/reports/parameter_study.csv` |
+| Configurations searched | 64 | every one is in [`results/parameter_study.csv`](results/parameter_study.csv) |
 | **Deflated Sharpe ratio** | **0.871** | 87% probability the Sharpe survives multiple testing (Bailey & López de Prado) |
 | Perfect-foresight Sharpe | 12.30 | the ceiling a total leak would reach |
 | honest / perfect-foresight | **0.100** | a leaking pipeline scores near 1.0; this is clean |
@@ -53,9 +53,9 @@ and the book is invested on 96.9% of days.
 Performance is **not** uniform. 2022 lost 7.0% during the hiking cycle (the
 benchmark lost 16.4%); 2024 and 2025 each gained over 9%. A strategy that only
 works in some regimes is the normal case, and the calendar-year table is in
-[`artifacts/backtests/latest/tearsheet.md`](artifacts/backtests/latest/tearsheet.md).
+[`results/tearsheet.md`](results/tearsheet.md).
 
-![Tearsheet](artifacts/backtests/latest/tearsheet.png)
+![Tearsheet](results/tearsheet.png)
 
 ---
 
