@@ -54,6 +54,7 @@ addopts = "-q --strict-markers"
 markers = [
   "slow: marks tests as slow",
   "network: marks tests that require network access",
+  "needs_curve: requires a built data/processed/curve.parquet (skipped on a clean clone)",
 ]
 filterwarnings = ["ignore::DeprecationWarning"]
 

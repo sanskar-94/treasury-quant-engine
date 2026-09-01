@@ -125,6 +125,22 @@ def _funding_from_curve(cfg: Config, index: pd.Index) -> pd.Series | None:
     is available, in which case the engine simply cannot fund the book and says
     so via ``total_financing == 0``.
     """
+    # The overnight rate is what a repo book actually pays, and fed funds covers
+    # 1954-present, so prefer it outright. The shortest bill is only a fallback:
+    # the 1-month series does not begin until 2001, and using it alone left a
+    # third of the sample with no rate at all - which the engine then charged as
+    # zero. Every leveraged result before 2001 was financed for free.
+    macro = cfg.processed_dir / "macro.parquet"
+    if macro.exists():
+        try:
+            ff = pd.read_parquet(macro, columns=["fed_funds"])["fed_funds"].dropna()
+            if not ff.empty:
+                rate = ff.reindex(index.union(ff.index)).ffill().reindex(index)
+                if rate.notna().mean() > 0.99:
+                    return rate / 100.0 + cfg.costs.repo_spread_bp * 1e-4
+        except Exception as exc:  # noqa: BLE001
+            log.warning("fed funds unusable as a funding rate (%s); falling back", exc)
+
     path = cfg.processed_dir / "curve.parquet"
     if not path.exists():
         return None
@@ -135,8 +151,16 @@ def _funding_from_curve(cfg: Config, index: pd.Index) -> pd.Series | None:
         avail = [c for c in curve.columns if c in TENOR_YEARS]
         if not avail:
             return None
-        short = min(avail, key=lambda c: TENOR_YEARS[c])
-        rate = curve[short].reindex(index.union(curve.index)).ffill().reindex(index)
+        # Cascade from the shortest tenor upward, filling each gap with the next
+        # shortest rate that actually exists on that date. No look-ahead: every
+        # rate used is observable when it is used.
+        avail.sort(key=lambda c: TENOR_YEARS[c])
+        wide = curve[avail].reindex(index.union(curve.index)).ffill().reindex(index)
+        rate = wide[avail[0]]
+        for nxt in avail[1:]:
+            if not rate.isna().any():
+                break
+            rate = rate.fillna(wide[nxt])
         return rate + cfg.costs.repo_spread_bp * 1e-4
     except Exception as exc:  # noqa: BLE001 - financing must not break a run
         log.warning("could not derive a funding rate (%s); financing not charged", exc)
@@ -210,7 +234,24 @@ def _core_loop(
     idx = positions.index
     fin_arr = np.zeros(len(pos))
     if include_financing and funding_rate is not None:
-        rate = funding_rate.reindex(idx).ffill().fillna(0.0).to_numpy(dtype=float)
+        aligned = funding_rate.reindex(idx).ffill()
+        missing = int(aligned.isna().sum())
+        if missing:
+            # A missing funding rate must never become a zero one. Zero funding is
+            # free leverage, which is the single most effective way to manufacture
+            # a Sharpe ratio that does not exist - and because it is silent, it
+            # survives every test that does not look for it specifically. Charge
+            # the most expensive rate observed instead, so an incomplete series
+            # degrades toward pessimism rather than toward free money.
+            fallback = float(aligned.max()) if aligned.notna().any() else 0.0
+            log.warning(
+                "funding rate missing on %d/%d days (%.1f%%); charging %.3f%% on those "
+                "days rather than zero. Financing-sensitive results over this window "
+                "are conservative, not free.",
+                missing, len(idx), 100.0 * missing / max(len(idx), 1), 100.0 * fallback,
+            )
+            aligned = aligned.fillna(fallback)
+        rate = aligned.to_numpy(dtype=float)
         # Actual calendar days between marks, so weekends are funded too.
         days = np.empty(len(idx))
         days[0] = 1.0

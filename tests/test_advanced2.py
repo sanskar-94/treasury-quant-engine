@@ -502,3 +502,75 @@ class TestIntegration:
         b = size_portfolio(sig, tr, dv, cfg,
                            regime_scale=pd.Series(1.0, index=idx))["notional"]
         assert np.allclose(a.to_numpy(), b.to_numpy())
+
+
+class TestFinancingCoverage:
+    """Financing must never be silently free.
+
+    A missing funding rate that becomes ``0.0`` is free leverage. It inflated the
+    front end of the curve to a Sharpe of 5.76 and roughly doubled every levered
+    result before 2001, and it did so silently - no error, no warning, just a
+    better number. These tests exist because that bug lived in ``run_backtest``,
+    the one function this project designates as the single source of P&L truth.
+    """
+
+    @staticmethod
+    def _flat_book(n=300, notional=5e7):
+        idx = pd.bdate_range("2015-01-01", periods=n)
+        tenors = ["5 Yr"]
+        pos = pd.DataFrame(notional, index=idx, columns=tenors)
+        tr = pd.DataFrame(0.0, index=idx, columns=tenors)     # no market P&L at all
+        dv = pd.DataFrame(0.045, index=idx, columns=tenors)
+        return idx, pos, tr, dv
+
+    def test_missing_funding_is_not_free(self):
+        """A book held on borrowed money must lose money when the market is flat."""
+        from tqe.backtest.engine import _core_loop
+
+        idx, pos, tr, dv = self._flat_book()
+        # A funding series covering only the back half - exactly the 1 Mo problem.
+        rate = pd.Series(np.nan, index=idx)
+        rate.iloc[len(idx) // 2:] = 0.04
+
+        net, _, _, _, fin = _core_loop(
+            pos, tr, None, {"5 Yr": "belly"},
+            1e7, False, 1.0, funding_rate=rate, include_financing=True,
+        )
+        # Every single day is funded, not just the covered half.
+        assert (fin > 0).all(), "days without a quoted rate were financed for free"
+        assert net.sum() < 0, "a flat market on borrowed money must lose the carry"
+
+    def test_gap_days_charged_at_least_the_observed_rate(self):
+        """Uncovered days degrade toward pessimism, never toward free money."""
+        from tqe.backtest.engine import _core_loop
+
+        idx, pos, tr, dv = self._flat_book()
+        rate = pd.Series(np.nan, index=idx)
+        rate.iloc[len(idx) // 2:] = 0.04
+
+        _, _, _, _, gappy = _core_loop(
+            pos, tr, None, {"5 Yr": "belly"},
+            1e7, False, 1.0, funding_rate=rate, include_financing=True,
+        )
+        _, _, _, _, full = _core_loop(
+            pos, tr, None, {"5 Yr": "belly"},
+            1e7, False, 1.0, funding_rate=pd.Series(0.04, index=idx),
+            include_financing=True,
+        )
+        assert gappy.sum() >= full.sum() * 0.999, "a gap made financing cheaper"
+
+    @pytest.mark.needs_curve
+    def test_derived_funding_rate_covers_the_whole_curve(self):
+        """The shipped funding rate must have no holes and look like an overnight rate."""
+        from tqe.backtest.engine import _funding_from_curve
+        from tqe.config import load_config
+
+        cfg = load_config(Path(__file__).resolve().parents[1] / "configs" / "default.yaml")
+        idx = pd.read_parquet(cfg.processed_dir / "curve.parquet").index
+        rate = _funding_from_curve(cfg, idx)
+        assert rate is not None
+        assert rate.notna().all(), "funding rate still has gaps"
+        assert rate.min() >= 0.0 and rate.max() < 0.25, "funding rate is not plausible"
+        # Anchored on history: fed funds averaged ~5.9% in 1995 and ~0.2% in 2009.
+        assert rate.loc["1995"].mean() > 0.04, "1995 funding is implausibly cheap"
+        assert rate.loc["2009"].mean() < 0.02, "2009 funding is implausibly expensive"

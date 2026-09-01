@@ -625,15 +625,68 @@ Over 1993–2026 (7,419 days, funded):
 
 | Arm | Sharpe | Ann. return |
 | --- | ---: | ---: |
-| **Static long duration** | **+0.47** | +2.34% |
-| Term premium timed | −0.36 | −1.79% |
-| Term premium binary | −0.27 | −1.35% |
+| **Static long duration** | **+0.24** | +1.18% |
+| Term premium timed | −0.40 | −2.02% |
+| Term premium binary | −0.35 | −1.74% |
 
-Both timing rules score p = 0.66 against their own controls. **Holding duration
-passively earns a Sharpe of 0.47 over three decades even after financing — the
+Both timing rules score p = 0.68 against their own controls. **Holding duration
+passively earns a positive Sharpe over three decades even after financing — the
 term premium is real and it is collected by sitting still.** Trying to time it
 destroys the return. The decomposition is sound; it is not a timing signal, and
 that distinction is worth more than the −0.22 from the mis-specified test.
+
+> These figures were originally +0.47 / −0.36 / −0.27. They were roughly double
+> what they should have been because the engine funded 31.6% of the sample at a
+> rate of zero — see [the financing-coverage bug](#the-financing-coverage-bug)
+> below. The conclusion did not change; the hurdle did.
+
+### Where the term premium is actually paid
+
+If duration pays but timing it does not, the remaining question is *where* to own
+it. [`scripts/duration_harvest.py`](scripts/duration_harvest.py) holds a constant
+DV01 at each point on the curve, scaled to 5% annualised volatility, funded and
+costed over 1990–2026. Nothing is fitted, so the whole window is out of sample.
+
+| Arm | Sharpe | Ann. return | Financing p.a. | Leverage |
+| --- | ---: | ---: | ---: | ---: |
+| Constant DV01 3 Mo | −0.49 | −2.82% | 54.90% | 17.3× |
+| Constant DV01 1 Yr | +0.17 | +0.87% | 21.60% | 6.8× |
+| Constant DV01 3 Yr | +0.29 | +1.44% | 6.22% | 1.9× |
+| Constant DV01 10 Yr | +0.28 | +1.41% | 2.28% | 0.7× |
+| **Vol-targeted 30 Yr** | **+0.45** | **+2.27%** | 1.35% | 0.4× |
+
+**The front end loses money and the long end makes it, and the reason is
+leverage.** Matching 5% volatility with 3-month bills takes 17× leverage against
+0.4× with 30-year bonds; financing scales with borrowed notional, so the short
+end pays away 55% a year in interest to own the same risk. The best way to be
+paid for duration is to own it where you need the least borrowed money. Volatility
+targeting beats constant DV01 (+0.45 vs +0.29) and the advantage grows
+monotonically with maturity, which is the same effect seen from the other side.
+
+### The financing-coverage bug
+
+The table above originally showed the 3-month arm at a Sharpe of **+5.76**. The
+number that gave it away was not the Sharpe but the pair: a Sharpe of 5.76
+alongside a −23% drawdown at 5% annualised volatility is a 4.6-sigma move, which
+cannot happen. Both numbers could not be true.
+
+The engine derived its funding rate from the shortest available bill yield. FRED's
+1-month series does not begin until 2001, `ffill` cannot fill backwards, and the
+engine then did `.fillna(0.0)` — so **31.6% of every row in the project was
+financed at a rate of zero.** The implied average funding cost was 1.17% against a
+3-month bill yielding 2.81%; nobody funds 164bp below the asset they are buying.
+
+This is the same bug class as the other four — an unfunded position — but this
+time it was inside `run_backtest`, the one function designated as the single
+source of P&L truth. Everything levered before 2001 was affected, including the
+headline duration result.
+
+The fix takes the overnight rate from `fed_funds` (daily, 1954–present, 100%
+coverage, mean 2.95%), falls back to a cascade across short bill tenors, and
+**never charges zero**: a day with no quoted rate is charged the most expensive
+rate observed, so an incomplete series degrades toward pessimism rather than
+toward free money. Three regression tests cover it, including one asserting that a
+flat market held on borrowed money must lose the carry.
 
 ### The cash-neutral result, in full
 
