@@ -1,5 +1,12 @@
 """Portfolio construction and risk measurement."""
 
+from .funding import (
+    CashNeutralTrade,
+    build_cash_neutral_book,
+    cash_neutral_structure,
+    doubly_neutral_structure,
+    funding_cost,
+)
 from .hedging import (
     HedgeResult,
     dv01_hedge,
@@ -42,4 +49,6 @@ __all__ = [
     "structure_returns", "build_standard_structures",
     "HedgeResult", "dv01_hedge", "krd_hedge", "minimum_variance_hedge",
     "hedge_effectiveness",
+    "CashNeutralTrade", "cash_neutral_structure", "doubly_neutral_structure",
+    "funding_cost", "build_cash_neutral_book",
 ]

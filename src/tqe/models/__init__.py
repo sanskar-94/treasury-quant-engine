@@ -10,6 +10,13 @@ from .linear import (
     RidgeModel,
     ZeroModel,
 )
+from .regime_switching import (
+    HMMResult,
+    RegimeSwitchingModel,
+    fit_hmm,
+    rolling_regime_probs,
+    viterbi,
+)
 from .registry import (
     MODEL_REGISTRY,
     available_models,
@@ -28,4 +35,5 @@ __all__ = [
     "AverageEnsemble", "StackedEnsemble", "BestModelSelector",
     "MODEL_REGISTRY", "create_model", "build_ensemble", "register", "available_models",
     "save_bundle", "load_bundle", "latest_bundle",
+    "HMMResult", "fit_hmm", "viterbi", "rolling_regime_probs", "RegimeSwitchingModel",
 ]

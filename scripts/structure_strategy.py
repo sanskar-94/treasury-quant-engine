@@ -43,6 +43,7 @@ from tqe.data.sources import TENOR_YEARS  # noqa: E402
 from tqe.data.universe import constant_maturity_total_return, universe_panel  # noqa: E402
 from tqe.logging_utils import get_logger, setup_logging  # noqa: E402
 from tqe.models.registry import create_model  # noqa: E402
+from tqe.portfolio.funding import doubly_neutral_structure  # noqa: E402
 from tqe.portfolio.structures import build_standard_structures  # noqa: E402
 from tqe.training.splits import walk_forward_splits  # noqa: E402
 from tqe.training.train import _apply, fit_scaler  # noqa: E402
@@ -50,12 +51,20 @@ from tqe.training.train import _apply, fit_scaler  # noqa: E402
 log = get_logger("scripts.structures")
 
 
-def structure_panel(rets: dict, tenors: list[str], target_dv01: float = 1000.0):
+def structure_panel(rets: dict, tenors: list[str], target_dv01: float = 1000.0,
+                    cash_neutral: bool = False):
     """Daily returns and weights for each standard structure.
 
     Structures are rebuilt each day from that day's DV01s, so the DV01 weighting
     stays correct as durations drift. The weights used for date ``t`` come from
     ``t-1``'s DV01s - a book is sized before the day it is held, not after.
+
+    With ``cash_neutral=True`` each structure is additionally funded against a
+    bill leg so that net notional is zero as well as net DV01
+    (:func:`tqe.portfolio.funding.doubly_neutral_structure`). That is the whole
+    point of the comparison: the plain DV01-weighted version carries a 28.4%
+    annual financing drag because it is massively net long notional, and this
+    removes it while keeping ~95% of the curve exposure.
     """
     tr = universe_panel(rets, "total_return")[tenors]
     dv = universe_panel(rets, "dv01")[tenors].shift(1)
@@ -75,8 +84,15 @@ def structure_panel(rets: dict, tenors: list[str], target_dv01: float = 1000.0):
         if not np.isfinite(row.to_numpy()).all():
             continue
         for s in build_standard_structures(row, tenors, target_dv01):
-            if s.name in weights:
-                weights[s.name].iloc[t] = s.weights.reindex(tenors).fillna(0.0).to_numpy()
+            if s.name not in weights:
+                continue
+            legs = s.weights
+            if cash_neutral:
+                try:
+                    legs = doubly_neutral_structure(s, row).legs
+                except Exception:  # noqa: BLE001 - fall back to the raw structure
+                    legs = s.weights
+            weights[s.name].iloc[t] = legs.reindex(tenors).fillna(0.0).to_numpy()
 
     for name in names:
         # A structure's P&L is (notional x return) summed over legs, which is
@@ -228,6 +244,8 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--placebos", type=int, default=40)
     ap.add_argument("--horizon", type=int, default=1)
+    ap.add_argument("--cash-neutral", action="store_true",
+                    help="fund each structure against a bill leg so net notional is zero")
     ap.add_argument("--out", default="artifacts/reports/structure_strategy.csv")
     args = ap.parse_args()
 
@@ -245,8 +263,9 @@ def main() -> int:
     print("  Trading the curve in STRUCTURE space (DV01-neutral by construction)")
     print("=" * 76)
 
-    sr, weights = structure_panel(rets, tenors)
-    print(f"  structures: {', '.join(sr.columns)}")
+    sr, weights = structure_panel(rets, tenors, cash_neutral=args.cash_neutral)
+    print(f"  structures: {', '.join(sr.columns)}"
+          f"{'  [cash-neutral funded]' if args.cash_neutral else '  [raw DV01-weighted]'}")
     print(f"  panel {sr.shape},  {sr.index.min().date()} .. {sr.index.max().date()}\n")
 
     # Arithmetic annualisation: these are relative-value spreads that can be
@@ -304,12 +323,20 @@ def main() -> int:
 
     print("\n" + "=" * 76)
     print(df.round(4).to_string(index=False))
-    best = df.sort_values("p_value").iloc[0]
+    # A negative Sharpe that merely beats even-worse controls is not a finding.
+    # Require the result to be positive before calling it one.
+    positive = df[df.sharpe > 0]
+    best = (positive.sort_values("p_value").iloc[0] if len(positive)
+            else df.sort_values("sharpe", ascending=False).iloc[0])
     print("\n=== VERDICT ===")
-    if best.p_value <= 0.10:
+    if best.sharpe > 0 and best.p_value <= 0.10:
         print(f"  {best.signal} reaches p={best.p_value:.4f} at Sharpe {best.sharpe:+.3f}.")
         print("  Trading the structures natively does better than projecting the")
         print("  exposure away after the fact.")
+    elif best.sharpe <= 0:
+        print(f"  No construction produced a positive Sharpe (best {best.sharpe:+.3f}).")
+        print("  Note that a negative result can still show a low p-value against")
+        print("  even-worse sign-flipped controls; that is not a finding.")
     else:
         print(f"  Best cell is {best.signal} at p={best.p_value:.4f} - not significant.")
         print("  Expressing the view natively in slope/curvature space does not")

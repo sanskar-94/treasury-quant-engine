@@ -35,6 +35,11 @@ from .pca import (
     reconstruction_error,
     rolling_pca_factors,
 )
+from .term_premium import (
+    TermPremiumResult,
+    decompose_term_premium,
+    term_premium_signal,
+)
 
 __all__ = [
     "NSSParams", "nss_zero_rate", "nss_forward_rate", "fit_nss",
@@ -43,5 +48,6 @@ __all__ = [
     "interpolate_curve", "forward_rate", "bootstrap_history", "zero_curve_function",
     "DNSParams", "VARModel", "fit_var", "dns_forecast", "dns_forecast_history",
     "beta_to_yields",
+    "TermPremiumResult", "decompose_term_premium", "term_premium_signal",
     "CurvePCA", "fit_curve_pca", "rolling_pca_factors", "reconstruction_error", "FACTOR_NAMES",
 ]
