@@ -1,13 +1,13 @@
 # Treasury Quant Engine
 
-An end-to-end quantitative trading system for the US Treasury market: yield-curve
+An end-to-end quantitative research system for the US Treasury market: yield-curve
 modelling, machine-learning return forecasting, risk-aware portfolio
-construction, cost-accurate backtesting, and automated execution with pre-trade
-risk controls.
+construction, cost- and financing-accurate backtesting, and automated execution
+with pre-trade risk controls.
 
-Built on **36 years of real Treasury data** (9,172 trading days, 1990–2026) pulled
-from Treasury.gov and FRED. No paid data, no vendor libraries — the bond maths,
-the curve models and the backtester are implemented from first principles.
+Built on **36 years of real Treasury data** (9,172 trading days, 1990–2026) from
+Treasury.gov and FRED. No paid data, no vendor libraries — the bond maths, the
+curve models and the backtester are implemented from first principles.
 
 ```bash
 git clone https://github.com/sanskar-94/treasury-quant-engine.git
@@ -18,129 +18,148 @@ python3 -m venv .venv && ./.venv/bin/pip install -e ".[all]"
 
 ---
 
-## Headline result
+## The headline is a negative result
 
-Walk-forward out-of-sample, **2018-08-03 to 2026-08-27** (2,016 trading days,
-8 non-overlapping annual folds). Every prediction was made by a model that had
-never seen the day it was predicting, nor anything after it.
+**The model has a real statistical edge that does not survive contact with a
+properly funded portfolio.** That is the finding, and it is stated first because
+the interesting engineering here is what it took to establish it.
 
-| | Strategy (net) | Strategy (gross) | Buy & hold 10y |
-| --- | ---: | ---: | ---: |
-| Sharpe ratio | **1.23** | 2.35 | 0.18 |
-| Annualised return | 2.39% | 4.52% | 1.40% |
-| Annualised volatility | 1.94% | 1.92% | 7.69% |
-| Maximum drawdown | −10.28% | — | −27.11% |
-| Hit rate | 56.14% | — | — |
-| Sortino / Calmar | 1.89 / 0.23 | — | — |
+Out-of-sample, 2018-08 to 2026-08 (2,016 trading days, 8 walk-forward folds):
 
-Information ratio vs the benchmark is 0.14 with a correlation of only 0.31, so
-this is largely an independent return stream rather than levered duration.
-Average gross notional is $37.2mm on $10mm of capital (3.7×, inside the 4× cap),
-and the book is invested on 96.9% of days.
-
-**And the numbers that decide whether the above means anything:**
-
-| Check | Value | Reading |
+| Measure | Value | Reading |
 | --- | ---: | --- |
-| Configurations searched | 64 | every one is in [`results/parameter_study.csv`](results/parameter_study.csv) |
-| **Deflated Sharpe ratio** | **0.871** | 87% probability the Sharpe survives multiple testing (Bailey & López de Prado) |
-| Perfect-foresight Sharpe | 12.30 | the ceiling a total leak would reach |
-| honest / perfect-foresight | **0.100** | a leaking pipeline scores near 1.0; this is clean |
-| Annualised turnover | 444× | high — see [What I'd fix next](#what-id-fix-next) |
-| Cost drag | 2.12% p.a. | charged in 32nds per cash-Treasury convention |
-| Model IC (pooled, OOS) | +0.029 | positive on **all nine** tenors |
+| Model IC (pooled, OOS) | **+0.029** | real, and positive on all 9 tenors |
+| Sharpe, before financing | 2.43 | **meaningless — see below** |
+| Sharpe, financing charged | **0.12** | |
+| Deflated Sharpe (136 configs searched) | **0.011** | ~1% chance the Sharpe is real |
+| Sharpe, market-neutral (zero net cash **and** zero net DV01) | **+0.05** | p ≈ 0.14 against 20 placebos |
+| Perfect-foresight ceiling | 14.65 | the honest run captures 0.9% of it |
 
-Performance is **not** uniform. 2022 lost 7.0% during the hiking cycle (the
-benchmark lost 16.4%); 2024 and 2025 each gained over 9%. A strategy that only
-works in some regimes is the normal case, and the calendar-year table is in
-[`results/tearsheet.md`](results/tearsheet.md).
+The gap between 2.43 and 0.12 is the whole story: **the backtest was reporting a
+total return where it should have reported an excess return.**
+
+### How a Sharpe of 2.4 became 0.1
+
+`CostConfig` had a repo spread. `BacktestConfig` had `include_financing`. The
+P&L loop called neither. Positions earned their full total return with no charge
+for the money used to hold them.
+
+That sounds like a rounding error. It is not, because a three-month Treasury
+bill is nearly riskless: over this window it returned 2.81% at almost zero
+volatility, so **an unfunded backtest scores holding cash at a Sharpe above 12.**
+Any strategy with a net long bias inherits an enormous fictitious edge. This one
+was 72% net long at 3.7× gross leverage.
+
+With `net_notional × funding_rate × days/360` charged on the net book — longs
+pay, shorts receive, ACT/360 per the repo convention — the strategy earns 0.13%
+a year against a 2.56% financing drag.
+
+Decomposing what remains is worse:
+
+| Component | Annualised |
+| --- | ---: |
+| Market P&L (positions × returns) | **−1.53%** (Sharpe −1.46) |
+| Financing contribution | **+2.41%** |
+| Transaction costs | −0.09% |
+| **Net** | **+0.78%** |
+
+The positions *lose* money. The only positive contribution is financing, because
+the book is systematically short notional when rates are high (corr −0.44). That
+is a cash carry trade, not a forecast.
+
+### Proving it properly
+
+Correlation of −0.44 could be luck. So the book was projected onto the null
+space of **both** the cash vector and the DV01 vector — zero net funding, zero
+net duration, pure relative value — and run against a placebo battery:
+
+| | Sharpe |
+| --- | ---: |
+| Real predictions | **+0.05** |
+| Time-shuffled predictions (10 draws) | −0.12 ± 0.16 |
+| Tenor-shuffled predictions (10 draws) | −0.34 ± 0.37 |
+| Sign-flipped | −0.16 |
+
+2 of 20 placebos beat the real signal (p ≈ 0.14), and the real result sits 0.9
+standard deviations above the placebo mean. **Indistinguishable from noise.**
+
+An IC of +0.029 is a real correlation. It is not a tradable edge.
 
 ![Tearsheet](results/tearsheet.png)
 
 ---
 
-## Why the honest numbers are the interesting ones
+## Why this is the useful outcome
 
-Most backtests are wrong in the same few ways. This project treats defending
-against those as the actual engineering problem, and three of the four bugs
-worth reporting were found by *running* the system rather than by reading it.
+A daily-frequency Treasury strategy with a genuine post-cost, post-funding
+Sharpe above 1 would be a significant discovery, not a weekend project. The
+prior should be that it does not exist. What a system like this is for is
+establishing that rigorously enough to believe the answer — and the four bugs
+below were each capable of manufacturing one, three of them found by *running*
+the system rather than reading it.
 
-### 1. A DV01 cap is not a leverage cap
+### 1. Financing was never charged
 
-The sizing layer allocated risk equally in DV01 terms and enforced a $25,000
-gross DV01 limit. It was also running **$148mm of notional on $10mm of capital**
-— 14.9× leverage — entirely inside its risk limit.
+Covered above. Cost: a Sharpe of 2.4 out of thin air. Now pinned by five
+regression tests, including one asserting that a book long a riskless instrument
+yielding the funding rate earns ~0 when funded and >5 Sharpe when not.
 
-A 3-month bill has a DV01 of ~$0.0025 per 100 face against ~$0.16 for the
-30-year, a factor of 65. Equal *risk* therefore means 65× the *notional* at the
-front end. Since transaction costs are charged on notional, the front-end leg was
-cheap in risk and ruinous to trade. `dv01_scaled_positions` now enforces gross
-notional against `max_leverage`, and says why in its docstring.
+### 2. A DV01 cap is not a leverage cap
 
-### 2. Turnover, not signal, was the binding constraint
-
-The first honest backtest returned **gross Sharpe +1.26, net −0.56**. Turnover
-was 2,365× capital per year and costs ate 11.4% p.a. The alpha was real; the
-implementation gave all of it away.
-
-`apply_no_trade_band` holds a position until the target drifts materially, then
-trades all the way to it. Turnover fell to 444× and cost drag to 2.1%.
+The sizing layer enforced a $25,000 gross DV01 limit while running **$148mm of
+notional on $10mm of capital** — 14.9× leverage — entirely inside its risk
+limit. A 3-month bill has ~1/65th the DV01 of a 30-year, so equal *risk* means
+65× the *notional* at the front end. Costs and funding are both charged on
+notional.
 
 ### 3. Z-scoring a return forecast destroys it
 
-The default signal transform was a trailing z-score. Across the full
-64-configuration sweep the result was unambiguous:
+Across a 64-configuration sweep, all 32 `vol_scale` variants produced a positive
+net Sharpe and all 32 `zscore` variants a negative one. The model forecasts a
+*return*, so zero means "no move expected" — a meaningful point. Subtracting a
+trailing mean replaces it with "unusually bullish lately", which is a different
+and actively harmful statement.
 
-| Signal transform | Configs | Net Sharpe (median) | Positive |
-| --- | ---: | ---: | ---: |
-| `vol_scale` | 32 | **+0.54** | **32 / 32** |
-| `zscore` | 32 | −1.08 | 0 / 32 |
+### 4. The look-ahead canary was testing nothing
 
-This is structural, not fitted. The model forecasts a *return*, so zero means
-"no move expected" — a meaningful point. Subtracting a trailing mean replaces
-that with "unusually bullish relative to how bullish the model has been lately",
-which is a different and actively harmful statement. Demean a forecast only when
-you distrust its calibration more than you trust its level.
+Three definitions were needed before it measured anything real:
 
-### 4. The look-ahead canary was testing the wrong thing
+- *Shift the signal forward.* Proves nothing: `signal[t+1]` forecasts
+  `return[t+1]`, so trading day *t* with it merely misaligns it.
+- *Re-size a `sign(return)` signal through the pipeline.* The no-trade band and
+  monthly schedule throttle the canary too, so "perfect foresight" scored
+  **below** the honest run.
+- *Keep the strategy's own position sizes, flip each to the sign of the
+  **relative** return, hold cash neutral.* This works — 14.65 against an honest
+  0.13, ratio 0.009.
 
-The original canary re-ran the backtest with the signal shifted one day forward
-and expected a large positive Sharpe. It got −4.53, which looks reassuring and
-proves nothing: `signal[t+1]` forecasts `return[t+1]`, so using it to trade day
-*t* merely misaligns it and scores near zero whether or not the pipeline leaks.
-
-The canary now trades the **realised future return** — perfect foresight, the
-ceiling any leak could reach — and reports `honest / foresight`. At **0.100**,
-the pipeline is clean. A leak would push that ratio toward 1.
+The middle failure is worth dwelling on: a canary that scores badly looks
+reassuring and is easy to accept.
 
 ---
 
 ## How look-ahead bias is prevented
 
-The system assumes it is wrong and tries to catch itself:
-
-- **One causality boundary.** Every feature block is written causal-as-of-its-own
-  close, and exactly one line — `X.shift(feature_lag)` in
-  [`features/builder.py`](src/tqe/features/builder.py) — moves the whole matrix
-  to prediction time. Enforcing it in two places is how double-lagging happens.
-- **Real publication lags.** CPI for January is stamped `1990-01-01` in FRED but
-  released in mid-February. Forward-filling it onto a daily grid hands the model
-  three weeks of foresight.
-  [`features/macro.py`](src/tqe/features/macro.py) shifts each series by its
-  actual release lag *before* it reaches the daily grid. NBER recession dates get
-  a 400-day lag, because that is roughly when they are actually declared.
-- **Purging and embargo.** Training rows whose forward-looking label overlaps the
-  test block are removed; a further embargo is dropped after it. `validate_splits`
-  audits the scheme before training starts and raises on violation — and the test
-  suite feeds it a deliberately leaky split to confirm it catches one.
-- **Causal PCA.** Curve factor loadings for day *t* are fitted only on data
-  through *t−1*. The test corrupts the last third of the sample by 25× and asserts
-  the earlier factor scores are bit-identical.
-- **Per-fold scaling.** The feature scaler is refitted inside each fold on
-  training data only. Standardising the full sample first leaks its mean and
-  variance into every row.
-- **Deflated Sharpe.** 64 configurations were searched, and the reported figure
-  is adjusted for all 64.
+- **One causality boundary.** Every feature block is causal as of its own close;
+  exactly one line — `X.shift(feature_lag)` in
+  [`features/builder.py`](src/tqe/features/builder.py) — moves the matrix to
+  prediction time. Enforcing it twice is how double-lagging happens.
+- **Real publication lags.** January CPI is stamped `1990-01-01` in FRED but
+  released in mid-February; forward-filling it hands the model three weeks of
+  foresight. [`features/macro.py`](src/tqe/features/macro.py) shifts each series
+  by its actual release lag *before* it reaches the daily grid. NBER recession
+  dates get 400 days.
+- **Purging and embargo.** Training rows whose forward label overlaps the test
+  block are dropped, plus an embargo after it. `validate_splits` audits the
+  scheme before training and raises on violation — the test suite feeds it a
+  deliberately leaky split to confirm it fails.
+- **Causal PCA.** Loadings for day *t* use only data through *t−1*. The test
+  corrupts the last third of the sample by 25× and asserts earlier factor scores
+  are bit-identical.
+- **Per-fold scaling.** The scaler is refitted inside each fold on training data
+  only.
+- **Deflated Sharpe.** All 136 searched configurations are counted, not the one
+  that won.
 
 ---
 
@@ -156,19 +175,19 @@ src/tqe/
 ├── training/      walk-forward splits with purging, metrics, training harness
 ├── signals/       forecast → signal → DV01-sized position
 ├── portfolio/     mean-variance optimiser, covariance, VaR/ES, stress scenarios
-├── backtest/      event-driven engine, 32nds cost model, tearsheet reporting
-├── execution/     broker protocol, paper broker, risk gate, idempotent OMS
+├── backtest/      event-driven engine, 32nds cost model, financing, tearsheets
+├── execution/     broker protocol, paper broker, Alpaca adapter, risk gate, OMS
 ├── live/          daily trading loop
 ├── api/           FastAPI service
 └── cli.py         tqe data | curve | features | train | backtest | predict | trade | serve
 ```
 
-Full interface contracts: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Interface contracts and the six places the implementation deliberately departed
+from them: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ### Pricing core
 
-Implemented from the Treasury's own price/yield conventions and validated
-against closed-form results, never against its own output:
+Validated against closed-form results, never against its own output:
 
 | Property | Result |
 | --- | --- |
@@ -178,20 +197,17 @@ against closed-form results, never against its own output:
 | Σ key-rate durations == effective duration | 8.077947 vs 8.077948 |
 | Bootstrapped zeros reprice input par bonds | 1.4e-13 |
 
-Accrued interest uses ACT/ACT (ICMA) within the actual coupon period; settlement
-follows the real T+1 / T+2 split at 2024-05-28; the calendar computes Good Friday
-via the Gregorian Easter algorithm and includes one-off closures like the 2012
-Hurricane Sandy shutdown.
+Accrued interest uses ACT/ACT (ICMA); settlement follows the real T+1/T+2 split
+at 2024-05-28; the calendar computes Good Friday from the Gregorian Easter
+algorithm and includes one-off closures such as the 2012 Hurricane Sandy
+shutdown.
 
 ### From yields to P&L
 
-The Treasury publishes *par yields*, not prices. To make a backtest economically
-real, `constant_maturity_total_return` builds the synthetic on-the-run par bond
-each day — which prices at exactly 100 by construction — then reprices **that
-same bond** at the next day's yield, one day shorter, and adds the coupon
-accrual.
-
-The replication checks out against reality over 1990–2026:
+The Treasury publishes *par yields*, not prices.
+`constant_maturity_total_return` builds the synthetic on-the-run par bond each
+day — which prices at exactly 100 by construction — then reprices **that same
+bond** at the next day's yield, one day shorter, plus coupon accrual.
 
 | Tenor | Ann. return | Ann. vol | Mean DV01 (per 100) |
 | --- | ---: | ---: | ---: |
@@ -200,20 +216,15 @@ The replication checks out against reality over 1990–2026:
 | 10 Yr | 4.88% | 7.46% | 0.0813 |
 | 30 Yr | 5.26% | 14.24% | 0.1648 |
 
-Monotone in tenor for both return and risk, and the 10-year matches published
-Treasury index history. Cross-checked against `−D·Δy + ½C·Δy²` to 0.025bp.
+Monotone in tenor for both return and risk; the 10-year matches published index
+history. Cross-checked against `−D·Δy + ½C·Δy²` to 0.025bp.
 
-### Curve modelling — and a note on identifiability
+### Curve modelling, and a note on identifiability
 
-Nelson-Siegel-Svensson fits the real curve to **1.0bp RMSE** across 14 tenors.
-But NSS is **not identifiable**: many (β, τ) combinations are observationally
-equivalent to well under a basis point. Fitting all six parameters freely gives
-an excellent curve and useless parameters — measured over the full history, free
-τ gives β₃ a standard deviation of **1.65** with 99th-percentile daily jumps of
-2.25, as the optimiser hops between equivalent solutions.
-
-Following Diebold & Li (2006), fixing the decays makes the model linear in β and
-the factors uniquely identified:
+NSS fits the real curve to **1.0bp RMSE** across 14 tenors, but the
+parameterisation is **not identifiable** — many (β, τ) combinations are
+observationally equivalent. Fitting all six freely gives an excellent curve and
+useless parameters. Following Diebold & Li (2006), fixing the decays:
 
 | | Free τ | Fixed τ (1.37, 8.0) |
 | --- | ---: | ---: |
@@ -222,19 +233,17 @@ the factors uniquely identified:
 | Fit RMSE | 2.98bp | 7.62bp |
 | Runtime, 9,172 days | 43.6s | **1.0s** |
 
-The fixed-τ factors are also economically meaningful: `corr(β₀+β₁, 3-month
-yield) = 0.998`. Free τ is available for pricing, where fit quality is what
-matters; fixed τ feeds the model, where stability is.
+The fixed-τ factors are economically meaningful: `corr(β₀+β₁, 3-month yield) =
+0.998`. Free τ is available for pricing, where fit quality matters; fixed τ
+feeds the model, where stability does.
 
 PCA on daily yield changes gives **77.2% / 13.3% / 5.0%** for level / slope /
-curvature. (The often-quoted 90/7/2 applies to a narrower 2y–30y set; including
-the 3-month bill, which decouples when the Fed is pinned, moves variance out of
-level and into slope.)
+curvature. (The often-quoted 90/7/2 applies to a narrower 2y–30y set.)
 
-### Cost model
+### Costs and financing
 
-Quoted the way the cash market actually quotes: half-spreads in **32nds of a
-point**, plus square-root market impact and commission.
+Half-spreads in **32nds of a point**, plus square-root impact and commission;
+funding at the bill yield plus the configured repo spread.
 
 ```
 $10mm on-the-run 10y   spread 0.5/32 = 1.56bp of price
@@ -246,16 +255,17 @@ $10mm on-the-run 10y   spread 0.5/32 = 1.56bp of price
 
 ### Execution
 
-- `PaperBroker` with correct position accounting through a sign flip — buy 100 @
-  100, sell 60 @ 110, sell 60 @ 120 realises exactly $1,400 and leaves a short
-  20 at an average of 120. (This is the classic accounting bug, so it is a test.)
-- `RiskGate` enforcing hard limits — order and position notional, gross/net DV01,
-  daily loss, drawdown, orders per day — plus a kill switch that stays tripped
-  until explicitly reset. Every rejection hits the audit log.
-- `OMS` that is **idempotent**: running the same day twice generates zero orders
-  the second time, verified in the smoke test. It reconciles against broker state
-  and persists to disk, so a crashed session can be safely re-run.
-- Live trading is `dry_run=True` everywhere by default and additionally requires
+- `PaperBroker` with correct accounting through a sign flip — buy 100 @ 100,
+  sell 60 @ 110, sell 60 @ 120 realises exactly $1,400 and leaves a short 20 at
+  an average of 120. That is the classic bug, so it is a test.
+- `AlpacaBroker` implementing the same protocol; defaults to the paper endpoint
+  and refuses the live one without `allow_live=True`.
+- `RiskGate` with hard limits (order/position notional, gross/net DV01, daily
+  loss, drawdown, orders per day) and a kill switch that stays tripped until
+  explicitly reset.
+- `OMS` that is **idempotent** — running the same day twice generates zero
+  orders the second time — reconciles against broker state, and persists to disk.
+- Live trading is `dry_run=True` by default and additionally requires
   `--live --yes`. The HTTP API physically cannot place an order.
 
 ---
@@ -265,10 +275,9 @@ $10mm on-the-run 10y   spread 0.5/32 = 1.56bp of price
 ```bash
 tqe data pull                    # 36 years of curve + 16 FRED series (cached)
 tqe curve fit                    # NSS betas, bootstrapped zeros, causal PCA factors
-tqe curve fit --date 2026-08-28  # inspect a single day's fit
 tqe features build               # 482 features × 6,946 rows
 tqe train                        # walk-forward + deployable bundle
-tqe backtest --n-trials 64       # costs, tearsheet, deflated Sharpe
+tqe backtest --n-trials 136      # costs, financing, tearsheet, deflated Sharpe
 tqe predict                      # next session's forecast per tenor
 tqe trade --dry-run              # full live path, no orders sent
 tqe serve --port 8000            # FastAPI
@@ -285,58 +294,57 @@ every seam on synthetic data in about a minute — 45 checks, no network.
 make test
 ```
 
-Numerical code is tested against closed-form results and invariants, never
-against values copied from its own output. The suite includes negative
-controls — a deliberately leaky split that `validate_splits` must reject, and a
-future-corruption test that the causal PCA must survive unchanged.
+265 tests. Numerical code is checked against closed-form results and invariants,
+never against values copied from its own output. The suite leans on negative
+controls:
+
+- a deliberately leaky split that `validate_splits` must reject,
+- a future-corruption test the causal PCA must survive bit-identically,
+- a backtest whose positions must not move when one day's return is multiplied
+  by 50,
+- an unfunded riskless-carry book that must score >5 Sharpe, and ~0 when funded,
+- a deflated Sharpe that must fall as the trial count rises.
 
 ---
 
-## What I'd fix next
+## What I'd do next
 
-Being specific about the limitations is more useful than hiding them:
-
-1. **Turnover is still 444× capital per year.** It is survivable at 2.1% cost
-   drag but it is the strategy's main fragility — a wider bid-ask than modelled
-   would hurt disproportionately. The next step is optimising the no-trade band
-   against a properly estimated impact function rather than a fixed threshold.
-2. **The stacked ensemble shrinks hard.** Its NNLS weights sum to ~0.003, so the
-   raw output carries almost no scale (`scale_to_return_units` exists to repair
-   this for the optimiser). A calibrated-probability formulation would be cleaner
-   than post-hoc rescaling.
-3. **ETF proxies, not cash bonds.** Execution maps tenors to TLT/IEF/IEI/SHY
-   because they are reachable from a retail broker. Real implementation would
-   trade the on-the-run issues or futures, where the cost model already applies.
-4. **Directional accuracy is 47.9% while IC is +0.029.** The model gets magnitude
-   right more reliably than sign, which is why `vol_scale` sizing works and naive
-   sign-following does not. Worth understanding rather than working around.
-5. **Macro coverage forces a trade-off.** TIPS breakevens start in 2003 and the
-   broad dollar index in 2006, so keeping them truncates training to 2007
-   onwards. The default (`min_feature_coverage: 0.80`) drops them and trains from
-   1993 instead; both are one config line apart.
+1. **Longer horizons.** Daily rates forecasting is close to a coin flip. The IC
+   is real but tiny; weekly or monthly targets have a better signal-to-noise
+   ratio and would be taxed far less by turnover.
+2. **Relative value, not direction.** The one place the pipeline showed anything
+   was cross-sectional. Building the target as *relative* tenor performance from
+   the outset, rather than forecasting absolute returns and subtracting
+   afterwards, is the natural next design.
+3. **Carry and roll-down as the baseline.** Any forecast should be measured
+   against what carry alone earns, which this system computes but does not yet
+   use as the benchmark.
+4. **The stacked ensemble shrinks hard** — NNLS weights sum to ~0.003, so its
+   raw output carries almost no scale. A calibrated formulation would be cleaner
+   than the `scale_to_return_units` rescaling that currently patches it.
+5. **ETF proxies, not cash bonds.** Execution maps tenors onto SHY/IEI/IEF/TLT
+   because they are reachable from a retail broker; durations are approximate.
 
 ---
 
 ## Data sources
 
-- **US Treasury** — Daily Treasury Par Yield Curve Rates (CMT), 1990–present.
-  Coverage is genuinely ragged and is handled rather than papered over: the 20y
-  starts 1993-10, the 30y has a real publication gap from 2002-02 to 2006-02, and
-  a 1.5-month tenor appeared on 2025-02-18.
-- **FRED** — 16 macro and market series (Fed funds, CPI, unemployment,
-  breakevens, credit spreads, VIX, dollar index, NBER recession dates).
+- **US Treasury** — Daily Par Yield Curve Rates (CMT), 1990–present. Coverage is
+  genuinely ragged and handled rather than papered over: the 20y starts 1993-10,
+  the 30y has a real gap from 2002-02 to 2006-02, and a 1.5-month tenor appeared
+  on 2025-02-18.
+- **FRED** — 16 macro and market series. `scripts/fetch_macro.py` handles FRED's
+  undocumented burst rate-limiting, which manifests as hung connections rather
+  than HTTP 429.
 
-Both are public and need no API key. `scripts/fetch_macro.py` handles FRED's
-undocumented burst rate-limiting, which manifests as hung connections rather
-than HTTP 429.
+Both are public and need no API key.
 
 ---
 
 ## Disclaimer
 
 Research and educational software. Not investment advice. The backtest is a
-simulation, and simulated results are not a promise about the future. Do not
-trade real money with this without doing your own work on it first.
+simulation, and this one reports a negative result: do not trade it.
 
 ## Licence
 

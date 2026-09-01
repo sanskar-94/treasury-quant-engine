@@ -380,45 +380,50 @@ def run_backtest(
 
     # ---- look-ahead canary ------------------------------------------------- #
     if run_canary:
-        # Perfect foresight: trade the sign of the return that is about to be
-        # realised, scaled like a real signal. This is the ceiling a total
-        # leak would reach, so the honest run must sit far below it.
+        # A clean ceiling: keep the strategy's OWN position sizes, but flip each
+        # one to the sign of the return that is about to be realised. Same risk,
+        # same turnover constraints, same funding - perfect direction.
         #
-        # The signal is demeaned cross-sectionally so the canary carries no net
-        # cash position. Without that it pays (or receives) funding like any
-        # other book, and on a net-long-biased forecast the funding drag can
-        # drive the "perfect" run BELOW the honest one - which makes the ratio
-        # meaningless. Neutralising the funding leg leaves a clean measure of
-        # how much of the achievable forecasting edge is being captured.
-        realised = returns_panel[tenors].reindex(sig.index)
-        cheat = np.sign(realised) * sig.abs().replace(0.0, 1.0)
-        cheat = cheat.sub(cheat.mean(axis=1), axis=0).fillna(0.0)
+        # Two earlier definitions were discarded. Shifting the signal forward
+        # only misaligns it and scores near zero whether or not the pipeline
+        # leaks. Re-sizing a sign(return) signal through the full pipeline lets
+        # the no-trade band and the monthly schedule throttle the canary itself,
+        # so under tight turnover limits "perfect foresight" scored below the
+        # honest run and the ratio became meaningless.
         try:
-            from ..signals.sizing import size_portfolio as _size
-
-            cheat_pos = _size(
-                cheat,
-                returns_panel[tenors].reindex(cheat.index),
-                dv01_panel[tenors].reindex(cheat.index),
-                pc,
-            )["notional"].fillna(0.0)
-            # Force the canary's net notional to zero so its P&L is pure
-            # forecasting, uncontaminated by a funding position.
+            realised = returns_panel[tenors].reindex(positions.index).fillna(0.0)
+            # Cash-neutral perfect foresight has to target RELATIVE returns, not
+            # absolute ones: long whatever outperforms the cross-section, short
+            # whatever lags. Aligning with the absolute sign and then demeaning
+            # destroys the alignment - on a day when every tenor rallies, the
+            # demeaned book is forced short half of them.
+            excess = realised.sub(realised.mean(axis=1), axis=0)
+            cheat_pos = positions.abs() * np.sign(excess)
             cheat_pos = cheat_pos.sub(cheat_pos.mean(axis=1), axis=0)
+            neutral_pos = positions.sub(positions.mean(axis=1), axis=0)
+
             c_net, _, _, _, _ = _core_loop(
                 cheat_pos, returns_panel, cost_model, buckets,
                 bc.initial_capital, bc.include_costs, bc.slippage_multiplier,
                 funding_rate=funding_rate, include_financing=bc.include_financing,
             )
+            h_net, _, _, _, _ = _core_loop(
+                neutral_pos, returns_panel, cost_model, buckets,
+                bc.initial_capital, bc.include_costs, bc.slippage_multiplier,
+                funding_rate=funding_rate, include_financing=bc.include_financing,
+            )
             canary = performance_metrics(c_net).get("sharpe", np.nan)
+            honest_neutral = performance_metrics(h_net).get("sharpe", np.nan)
             metrics["lookahead_canary_sharpe"] = float(canary)
-            honest = metrics.get("sharpe", 0.0)
-            metrics["canary_ratio"] = float(honest / canary) if abs(canary) > EPS else np.nan
-            if abs(canary) > EPS and honest / canary > 0.35:
+            metrics["cash_neutral_sharpe"] = float(honest_neutral)
+            metrics["canary_ratio"] = (
+                float(honest_neutral / canary) if abs(canary) > EPS else np.nan
+            )
+            if abs(canary) > EPS and honest_neutral / canary > 0.35:
                 log.warning(
-                    "LOOK-AHEAD SUSPECTED: honest Sharpe %.2f is %.0f%% of the cheating "
-                    "run's %.2f - a clean pipeline should be far below it",
-                    honest, 100 * honest / canary, canary,
+                    "LOOK-AHEAD SUSPECTED: the cash-neutral run scores %.2f against a "
+                    "perfect-foresight ceiling of %.2f - a clean pipeline should be far below it",
+                    honest_neutral, canary,
                 )
         except Exception as exc:  # noqa: BLE001 - the canary must never break the run
             log.warning("look-ahead canary failed to run: %s", exc)
