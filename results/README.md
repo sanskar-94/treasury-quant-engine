@@ -21,6 +21,7 @@ is checked in so the results can be read without running anything.
 | `turnover_study_v2.csv` | 54 turnover configs, re-run after the alignment fix |
 | `carry_benchmark.csv` | carry vs model vs blend, each against 40 block-sign-flip controls |
 | `structure_strategy.csv` | DV01-neutral steepeners and butterflies, funded, vs 40 controls |
+| `duration_timing.csv` | can the term premium time duration? static vs timed, funded |
 | `integration_experiment.csv` | term premium and regime conditioning vs baseline, 40 controls each |
 | `structure_strategy_cashneutral.csv` | structures funded against a bill leg (net notional zero) |
 | `charts/curve_surface.png` | the full curve 1990-2026 with inversions shaded |

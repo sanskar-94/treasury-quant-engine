@@ -59,6 +59,49 @@ _LOG = get_logger("execution.oms")
 OMS_STATE_VERSION = 1
 
 
+def schedule_order(
+    order,
+    n_slices: int = 1,
+    strategy: str = "twap",
+    **kwargs,
+) -> list:
+    """Split one parent order into child orders on an execution schedule.
+
+    The OMS otherwise sends a parent order as a single print, which is what the
+    backtest's impact model assumes and what a desk would not do for size. This
+    turns a parent into children on a TWAP, VWAP or Almgren-Chriss trajectory
+    (see :mod:`tqe.execution.scheduling`), preserving the parent's id as a tag so
+    the fills reconcile back.
+
+    ``n_slices=1`` returns the parent untouched, which is the default everywhere
+    - slicing is a decision the caller makes deliberately.
+    """
+    from dataclasses import replace
+
+    from .scheduling import almgren_chriss_schedule, twap_schedule, vwap_schedule
+
+    if n_slices <= 1:
+        return [order]
+
+    qty = float(order.quantity)
+    if strategy == "vwap":
+        sched = vwap_schedule(qty, kwargs.pop("volume_profile", [1.0] * n_slices))
+    elif strategy in ("ac", "almgren_chriss"):
+        sched = almgren_chriss_schedule(qty, n_slices=n_slices, **kwargs)
+    else:
+        sched = twap_schedule(qty, n_slices)
+
+    children = []
+    for i, q in enumerate(sched.quantities):
+        if abs(q) < 1e-9:
+            continue
+        child = replace(order, quantity=abs(float(q)))
+        child.id = f"{order.id}-{i:02d}"
+        child.tag = f"{order.tag}|parent:{order.id}|slice:{i}"
+        children.append(child)
+    return children
+
+
 class OMS:
     """Order lifecycle, risk routing, persistence and reconciliation.
 

@@ -429,3 +429,76 @@ class TestScheduling:
     def test_shortfall_validates_shapes(self):
         with pytest.raises(ValueError):
             implementation_shortfall(twap_schedule(self.Q, 4), 100.0, [100.0, 100.0])
+
+
+# --------------------------------------------------------------------------- #
+# Integration: order slicing and regime-scaled sizing
+# --------------------------------------------------------------------------- #
+class TestIntegration:
+    def _order(self, qty: float = 1_000_000.0):
+        from tqe.execution.broker import Order, OrderSide, OrderType
+
+        return Order(symbol="IEF", side=OrderSide.BUY, quantity=qty,
+                     order_type=OrderType.MARKET, tag="t")
+
+    def test_single_slice_returns_the_parent(self):
+        from tqe.execution.oms import schedule_order
+
+        o = self._order()
+        assert schedule_order(o, n_slices=1) == [o]
+
+    @pytest.mark.parametrize("strategy", ["twap", "vwap", "ac"])
+    def test_children_sum_to_the_parent(self, strategy):
+        from tqe.execution.oms import schedule_order
+
+        children = schedule_order(self._order(), n_slices=5, strategy=strategy)
+        assert sum(c.quantity for c in children) == pytest.approx(1_000_000.0, abs=1e-6)
+
+    def test_children_carry_the_parent_id(self):
+        from tqe.execution.oms import schedule_order
+
+        parent = self._order()
+        children = schedule_order(parent, n_slices=4)
+        assert all(c.id.startswith(parent.id) for c in children)
+        assert all(f"parent:{parent.id}" in c.tag for c in children)
+
+    def test_twap_children_are_equal(self):
+        from tqe.execution.oms import schedule_order
+
+        q = [c.quantity for c in schedule_order(self._order(), n_slices=5)]
+        assert np.allclose(q, q[0])
+
+    def test_regime_scale_damps_the_book(self):
+        """A calm-probability multiplier must shrink positions, not move them."""
+        from tqe.config import PortfolioConfig
+        from tqe.signals.sizing import size_portfolio
+
+        idx = pd.bdate_range("2022-01-01", periods=400)
+        cols = ["2 Yr", "10 Yr"]
+        rng = np.random.default_rng(11)
+        sig = pd.DataFrame(rng.normal(size=(len(idx), 2)), index=idx, columns=cols)
+        tr = pd.DataFrame(rng.normal(0, 0.002, (len(idx), 2)), index=idx, columns=cols)
+        dv = pd.DataFrame({"2 Yr": 0.0192, "10 Yr": 0.0813}, index=idx)
+        cfg = PortfolioConfig()
+
+        full = size_portfolio(sig, tr, dv, cfg)["notional"]
+        damped = size_portfolio(sig, tr, dv, cfg,
+                                regime_scale=pd.Series(0.5, index=idx))["notional"]
+        assert damped.abs().sum().sum() < full.abs().sum().sum()
+
+    def test_regime_scale_of_one_is_a_no_op(self):
+        from tqe.config import PortfolioConfig
+        from tqe.signals.sizing import size_portfolio
+
+        idx = pd.bdate_range("2022-01-01", periods=300)
+        cols = ["2 Yr", "10 Yr"]
+        rng = np.random.default_rng(12)
+        sig = pd.DataFrame(rng.normal(size=(len(idx), 2)), index=idx, columns=cols)
+        tr = pd.DataFrame(rng.normal(0, 0.002, (len(idx), 2)), index=idx, columns=cols)
+        dv = pd.DataFrame({"2 Yr": 0.0192, "10 Yr": 0.0813}, index=idx)
+        cfg = PortfolioConfig()
+
+        a = size_portfolio(sig, tr, dv, cfg)["notional"]
+        b = size_portfolio(sig, tr, dv, cfg,
+                           regime_scale=pd.Series(1.0, index=idx))["notional"]
+        assert np.allclose(a.to_numpy(), b.to_numpy())

@@ -613,14 +613,27 @@ real if small — damping the signal in the high-volatility state avoids trading
 into exactly the conditions where the forecast is least reliable. It is not
 significant, but it is the right sign and it is cheap.
 
-**The term premium test is not a fair one, and saying so matters more than the
-number.** A term premium is intrinsically *directional* — it says whether owning
-duration is paid — and the double-neutral book cannot hold a directional view by
-construction. Demeaning it cross-sectionally to fit that book strips out exactly
-the information it carries. The −0.22 is evidence that a term premium makes a
-poor relative-value signal, which was never its claim. Evaluating it properly
-needs a book allowed to hold duration, and therefore a different answer to the
-funding question than this project has.
+**The term premium test above is not a fair one**, and rather than leave that as
+a caveat it was re-run properly. A term premium is intrinsically *directional* —
+it says whether owning duration is paid — and the double-neutral book cannot
+hold a directional view. So it was given a book that can
+([`scripts/duration_timing.py`](scripts/duration_timing.py)): net long duration,
+funded and costed, benchmarked against simply owning duration all the time. The
+question is not whether duration pays, but whether the premium says *when*.
+
+Over 1993–2026 (7,419 days, funded):
+
+| Arm | Sharpe | Ann. return |
+| --- | ---: | ---: |
+| **Static long duration** | **+0.47** | +2.34% |
+| Term premium timed | −0.36 | −1.79% |
+| Term premium binary | −0.27 | −1.35% |
+
+Both timing rules score p = 0.66 against their own controls. **Holding duration
+passively earns a Sharpe of 0.47 over three decades even after financing — the
+term premium is real and it is collected by sitting still.** Trying to time it
+destroys the return. The decomposition is sound; it is not a timing signal, and
+that distinction is worth more than the −0.22 from the mis-specified test.
 
 ### The cash-neutral result, in full
 
