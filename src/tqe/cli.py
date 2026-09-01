@@ -9,6 +9,9 @@ The whole pipeline is reachable from one binary::
     tqe train                # walk-forward evaluation + deployable bundle
     tqe backtest             # simulate with costs, write a tearsheet
     tqe predict              # today's forecast from the saved model
+    tqe attribute            # where the P&L came from, by factor and by source
+    tqe tune                 # nested walk-forward hyper-parameter search
+    tqe charts               # curve, factor, attribution and signal diagnostics
     tqe trade --dry-run      # one live session, no orders sent
     tqe serve                # FastAPI service
 
@@ -283,6 +286,120 @@ def cmd_backtest(args: argparse.Namespace) -> int:
 # --------------------------------------------------------------------------- #
 # predict / trade / serve
 # --------------------------------------------------------------------------- #
+def cmd_attribute(args: argparse.Namespace) -> int:
+    """Decompose the latest backtest's P&L by curve factor and by source."""
+    from .backtest.attribution import attribute_by_factor, attribute_by_source
+    from .data.universe import universe_panel
+
+    cfg = _cfg_from_args(args)
+    d = Path(args.backtest_dir or Path(cfg.backtest.output_dir) / "latest")
+    pos_path = d / "positions.parquet"
+    if not pos_path.exists():
+        raise SystemExit(f"No backtest at {d}. Run `tqe backtest` first.")
+
+    positions = pd.read_parquet(pos_path)
+    _, returns = _load_returns(cfg)
+    yc = universe_panel(returns, "yield_change")
+    dv = universe_panel(returns, "dv01")
+
+    capital = cfg.backtest.initial_capital
+    years = max(len(positions) / 252.0, 1e-9)
+
+    fa = attribute_by_factor(positions, yc, dv)
+    print("=== BY CURVE FACTOR (annualised, % of capital) ===")
+    print(f"  {'factor':<12} {'P&L':>10} {'share of gross risk':>21}")
+    for c in fa.contributions.columns:
+        pnl = fa.contributions[c].sum() / capital / years
+        print(f"  {c:<12} {pnl:>9.3%} {fa.factor_share[c]:>21.1%}")
+    print(f"\n  three factors explain {fa.explained_ratio:.1%} of P&L variance")
+
+    # Reuse the tested source decomposition rather than re-deriving it here.
+    # Reconstructing a minimal result object is cheap; duplicating P&L logic is
+    # how this project acquired five separate financing bugs.
+    rp = d / "returns.parquet"
+    if rp.exists():
+        from types import SimpleNamespace
+
+        rets = pd.read_parquet(rp)["returns"]
+        costs = (pd.read_parquet(d / "costs.parquet")["costs"]
+                 if (d / "costs.parquet").exists() else pd.Series(0.0, index=rets.index))
+        fin = (pd.read_parquet(d / "financing.parquet")["financing"]
+               if (d / "financing.parquet").exists() else pd.Series(0.0, index=rets.index))
+        gross = rets + (costs + fin) / capital
+
+        shim = SimpleNamespace(
+            returns=rets, gross_returns=gross, costs=costs, financing=fin,
+            config={"backtest": {"initial_capital": capital}},
+        )
+        src = attribute_by_source(shim)
+        print("\n=== BY SOURCE (annualised, % of capital) ===")
+        for col in ("market_pnl", "financing", "costs"):
+            print(f"  {col:<14} {src[col].sum() / capital / years:>9.3%}")
+        print(f"  {'-' * 24}")
+        print(f"  {'net':<14} {src['net'].sum() / capital / years:>9.3%}")
+        err = float((src["net"] - rets * capital).abs().max())
+        print(f"\n  reconciles with the engine's own P&L to {err:.2e}")
+    return 0
+
+
+def cmd_tune(args: argparse.Namespace) -> int:
+    """Nested walk-forward hyper-parameter search."""
+    import json as _json
+
+    from .features.builder import FeatureSet
+    from .training.tune import DEFAULT_GRIDS, nested_walk_forward
+
+    cfg = _cfg_from_args(args)
+    X = _require(_p(cfg, "X.parquet"), "tqe features build")
+    y = _require(_p(cfg, "y.parquet"), "tqe features build")
+    meta_path = cfg.processed_dir / "feature_meta.json"
+    meta = _json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    fs = FeatureSet(X=X, y=y, metadata=meta)
+
+    grid = DEFAULT_GRIDS.get(args.model)
+    print(f"nested walk-forward: {args.model}, grid {grid}")
+    print("  inner folds select the hyper-parameters; outer folds score the procedure")
+    res = nested_walk_forward(fs, args.model, grid, cfg, inner_splits=args.inner_splits,
+                              metric=args.metric)
+    print(f"\n{res.summary()}")
+    print("\n=== SELECTED PER OUTER FOLD ===")
+    print(res.leaderboard.to_string(index=False))
+    print("\n=== HONEST OUT-OF-SAMPLE METRICS ===")
+    for k, v in res.outer_metrics.items():
+        print(f"  {k:24s} {round(v, 6) if isinstance(v, float) else v}")
+    print(f"\n  {res.n_candidates} configurations evaluated in total - pass this to")
+    print("  `tqe backtest --n-trials` so the deflated Sharpe accounts for the search.")
+    return 0
+
+
+def cmd_charts(args: argparse.Namespace) -> int:
+    """Render the diagnostic chart set."""
+    from .curve.pca import fit_curve_pca, rolling_pca_factors
+    from .viz import plot_all
+
+    cfg = _cfg_from_args(args)
+    curve = _require(_p(cfg, "curve.parquet"), "tqe data pull")
+
+    def opt(name):
+        path = _p(cfg, f"{name}.parquet")
+        return pd.read_parquet(path) if path.exists() else None
+
+    nss = opt("nss")
+    core = [c for c in cfg.data.core_tenors if c in curve.columns]
+    changes = curve[core].diff().dropna(how="any")
+    pca = fit_curve_pca(changes, cfg.curve.n_pca_factors)
+    factors = rolling_pca_factors(changes, window=252, n_factors=cfg.curve.n_pca_factors)
+
+    out = Path(args.out or cfg.artifacts("reports", "charts"))
+    paths = plot_all(out, curve=curve, nss=nss, pca=pca, factors=factors,
+                     capital=cfg.backtest.initial_capital)
+    for path in paths:
+        print(f"  wrote {path}")
+    if not paths:
+        print("  no charts written (matplotlib missing?)")
+    return 0
+
+
 def cmd_predict(args: argparse.Namespace) -> int:
     from .models.registry import latest_bundle, load_bundle
 
@@ -478,6 +595,21 @@ def build_parser() -> argparse.ArgumentParser:
                    help="configurations searched, for the deflated Sharpe ratio")
     b.add_argument("--no-plots", action="store_true")
     b.set_defaults(func=cmd_backtest)
+
+    # attribute / tune / charts
+    at = sub.add_parser("attribute", help="decompose the backtest P&L")
+    at.add_argument("--backtest-dir")
+    at.set_defaults(func=cmd_attribute)
+
+    tu = sub.add_parser("tune", help="nested walk-forward hyper-parameter search")
+    tu.add_argument("--model", default="ridge")
+    tu.add_argument("--inner-splits", type=int, default=3)
+    tu.add_argument("--metric", default="ic", choices=["ic", "rank_ic", "rmse", "r2"])
+    tu.set_defaults(func=cmd_tune)
+
+    ch = sub.add_parser("charts", help="render diagnostic charts")
+    ch.add_argument("--out")
+    ch.set_defaults(func=cmd_charts)
 
     # predict
     pr = sub.add_parser("predict", help="forecast the next session")
