@@ -108,6 +108,12 @@ class FeatureConfig:
     include_carry_rolldown: bool = True
     include_regime: bool = True
     regime_states: int = 3
+    # Mean-reversion blocks. Added after measuring that the momentum features
+    # anti-predict at horizons beyond one day (IC +0.025 -> -0.072 -> -0.174 at
+    # 1/5/21 days); these are the counterweight.
+    include_reversal: bool = True
+    include_rich_cheap: bool = True
+    reversal_windows: list[int] = field(default_factory=lambda: [5, 21, 63])
     # Minimum fraction of the sample a feature must cover to be kept.  This is
     # the main lever on the history/breadth trade-off: several FRED series start
     # late (TIPS breakevens 2003, the broad dollar index 2006, the ICE high-yield

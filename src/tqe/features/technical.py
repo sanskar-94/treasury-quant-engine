@@ -24,6 +24,8 @@ from ..logging_utils import get_logger
 log = get_logger("features.technical")
 
 __all__ = [
+    "curve_residual_features",
+    "reversal_features",
     "momentum_features",
     "volatility_features",
     "zscore_features",
@@ -273,3 +275,116 @@ def cross_tenor_features(changes: pd.DataFrame, window: int = 63) -> pd.DataFram
     ]
     out["avg_corr"] = pd.concat(corrs, axis=1).mean(axis=1)
     return pd.DataFrame(out, index=changes.index)
+
+
+def curve_residual_features(
+    curve: pd.DataFrame,
+    nss: pd.DataFrame,
+    tenor_years: dict[str, float] | None = None,
+    windows: Sequence[int] = (21, 63, 252),
+) -> pd.DataFrame:
+    """Rich/cheap: how far each tenor trades from the fitted curve.
+
+    This is the canonical relative-value signal in rates and it is the direct
+    answer to a specific defect measured in this project. The information
+    coefficient of the momentum-driven feature set is +0.025 at one day,
+    -0.072 at five and -0.174 at twenty-one: it extrapolates a move that has
+    already turned. Rich/cheap points the other way by construction - a tenor
+    trading cheap to the curve everyone else is on tends to richen back to it.
+
+    The residual is ``market yield - NSS fitted yield`` in basis points. The NSS
+    fit is a smooth four-factor description of the whole curve, so a large
+    residual means that one sector has dislocated from the shape the rest of the
+    curve implies, which is a mean-reverting condition rather than a trend.
+
+    Both the level and its trailing z-score are emitted; the z-score is what
+    makes "cheap" comparable across a decade in which the average dislocation
+    changed size.
+
+    Causality: the NSS parameters for date ``t`` are fitted on date ``t``'s own
+    quotes only - a cross-sectional fit, using no history - so the residual is
+    known at that day's close like any other feature block.
+    """
+    if tenor_years is None:
+        from ..data.sources import TENOR_YEARS
+
+        tenor_years = TENOR_YEARS
+    if nss is None or nss.empty:
+        return pd.DataFrame(index=curve.index)
+
+    need = ["beta0", "beta1", "beta2", "beta3", "tau1", "tau2"]
+    if any(c not in nss.columns for c in need):
+        return pd.DataFrame(index=curve.index)
+
+    params = nss[need].reindex(curve.index)
+    cols = [c for c in curve.columns if c in tenor_years]
+    b0, b1, b2, b3, t1, t2 = (params[c].to_numpy(dtype=float) for c in need)
+
+    def _loading(x: np.ndarray) -> np.ndarray:
+        """(1 - exp(-x)) / x, with the x -> 0 limit of 1 handled explicitly."""
+        return np.where(np.abs(x) < 1e-8, 1.0 - x / 2.0, (1.0 - np.exp(-x)) / np.where(x == 0, 1.0, x))
+
+    out: dict[str, pd.Series] = {}
+    resid_frame = {}
+    for col in cols:
+        # The scalar helper in curve.nelson_siegel validates tau as a scalar;
+        # here every parameter is a per-date vector, so the loadings are built
+        # directly. Same formula, evaluated elementwise across dates.
+        t = float(tenor_years[col])
+        with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+            x1 = np.where(t1 > 0, t / np.where(t1 > 0, t1, 1.0), np.nan)
+            x2 = np.where(t2 > 0, t / np.where(t2 > 0, t2, 1.0), np.nan)
+            f1, f2 = _loading(x1), _loading(x2)
+            fitted = b0 + b1 * f1 + b2 * (f1 - np.exp(-x1)) + b3 * (f2 - np.exp(-x2))
+        resid = (curve[col].to_numpy(dtype=float) - np.asarray(fitted, dtype=float)) * 1e4  # bp
+        s_res = pd.Series(resid, index=curve.index)
+        resid_frame[col] = s_res
+        out[f"rc_{col}"] = s_res
+        for w in windows:
+            mp = max(2, w // 2)
+            mu = s_res.rolling(w, min_periods=mp).mean()
+            sd = s_res.rolling(w, min_periods=mp).std()
+            out[f"rcz{w}_{col}"] = _safe_z(s_res, mu, sd)
+
+    if resid_frame:
+        rf = pd.DataFrame(resid_frame)
+        # Cross-sectional dispersion of dislocation: high when the curve is
+        # locally kinked, which is when RV opportunities exist at all.
+        out["rc_dispersion"] = rf.std(axis=1)
+        out["rc_absmean"] = rf.abs().mean(axis=1)
+    if "rmse" in nss.columns:
+        out["rc_fit_rmse"] = nss["rmse"].reindex(curve.index) * 1e4
+
+    return pd.DataFrame(out, index=curve.index)
+
+
+def reversal_features(
+    series: pd.DataFrame,
+    windows: Sequence[int] = (5, 21, 63),
+    prefix: str = "rev",
+) -> pd.DataFrame:
+    """Explicit short-horizon reversal signals.
+
+    The mirror image of :func:`momentum_features`, and included because the
+    measured IC degradation says this feature set needs it. Three constructions:
+
+    * ``rev{w}``  - the negated trailing change, so a large recent rally is a
+      negative (short) signal rather than a positive one,
+    * ``acc{w}``  - acceleration, the change in the trailing change: a move that
+      is decelerating is closer to exhausting than one that is not,
+    * ``ext{w}``  - extension, the trailing change divided by its own trailing
+      volatility, which is how far the move has run in units of normal noise.
+
+    ``ext`` is the useful one. A 20bp move is ordinary in 2022 and extreme in
+    2019, and only the volatility-scaled version says which regime you are in.
+    """
+    out: dict[str, pd.Series] = {}
+    for col in series.columns:
+        s = series[col]
+        for w in windows:
+            chg = s.diff(w)
+            out[f"{prefix}{w}_{col}"] = -chg
+            out[f"acc{w}_{col}"] = chg - chg.shift(w)
+            vol = s.diff().rolling(w, min_periods=max(2, w // 2)).std() * np.sqrt(w)
+            out[f"ext{w}_{col}"] = -chg / vol.where(vol.abs() > EPS)
+    return pd.DataFrame(out, index=series.index)

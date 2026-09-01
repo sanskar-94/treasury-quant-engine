@@ -33,9 +33,11 @@ from .regime import regime_features
 from .technical import (
     carry_rolldown_features,
     cross_tenor_features,
+    curve_residual_features,
     curve_shape_features,
     mean_reversion_features,
     momentum_features,
+    reversal_features,
     volatility_features,
     zscore_features,
 )
@@ -214,6 +216,13 @@ def build_features(
     blocks.append(mean_reversion_features(sub, fc.zscore_windows, prefix="ymr"))
     blocks.append(cross_tenor_features(changes))
 
+    # ---- mean reversion --------------------------------------------------- #
+    # Added in response to a measured defect: the momentum blocks give an IC of
+    # +0.025 at one day, -0.072 at five and -0.174 at twenty-one, i.e. they
+    # extrapolate a move that has already turned. These point the other way.
+    if fc.include_reversal:
+        blocks.append(reversal_features(sub, fc.reversal_windows))
+
     # ---- realised total-return momentum ------------------------------------ #
     tr = pd.DataFrame(
         {t: returns[t]["total_return"] for t in tenors if t in returns}, index=curve.index
@@ -235,6 +244,10 @@ def build_features(
     # ---- carry and roll-down ------------------------------------------------ #
     if fc.include_carry_rolldown:
         blocks.append(carry_rolldown_features(curve, returns))
+
+    # ---- rich/cheap versus the fitted curve --------------------------------- #
+    if fc.include_rich_cheap and nss is not None and not nss.empty:
+        blocks.append(curve_residual_features(curve, nss, windows=fc.zscore_windows))
 
     # ---- parametric curve factors ------------------------------------------ #
     if nss is not None and not nss.empty:
@@ -320,6 +333,8 @@ def build_features(
             "pca": bool(fc.include_pca and pca_factors is not None),
             "nss": bool(nss is not None and not nss.empty),
             "regime": bool(fc.include_regime),
+            "reversal": bool(fc.include_reversal),
+            "rich_cheap": bool(fc.include_rich_cheap and nss is not None and not nss.empty),
         },
     }
     fs = FeatureSet(X=X, y=y, metadata=meta)

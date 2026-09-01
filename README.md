@@ -355,18 +355,39 @@ centred on zero.
 
 The null used instead is a **block sign-flip**: multiply the finished signal by a
 random ±1 drawn once per 63-day block. That preserves magnitude, autocorrelation,
-persistence and cross-sectional shape — everything except alignment with future
-returns, which is the hypothesis under test. With a valid null the placebo means
-sit within ±0.11 of zero and the apparent findings disappear.
+persistence and cross-sectional structure — everything about the book except its
+alignment with future returns, which is exactly the hypothesis under test. With a
+valid null the placebo means sit within ±0.11 of zero and the apparent findings
+disappear.
+
+### Acting on the diagnosis: mean-reversion features
+
+The IC pattern is not just a failure, it is a *diagnosis* — a momentum-heavy
+feature set extrapolating a move that has already turned. So the indicated fix
+was built and measured: **rich/cheap residuals** (market yield minus the
+NSS-fitted yield, in bp — the canonical rates relative-value signal, and machinery
+the project already had but was throwing away) plus explicit **reversal,
+acceleration and volatility-scaled extension** features. 482 features became 613.
+
+| IC | 1 day | 5 days | 21 days |
+| --- | ---: | ---: | ---: |
+| Momentum only | +0.025 | −0.072 | −0.174 |
+| **+ mean reversion** | +0.024 | **−0.046** | **−0.132** |
+
+The diagnosis was right and the fix works in the right direction — roughly a
+third of the degradation removed at both horizons — but it is **not enough to
+flip the sign**. Still 0 of 6 cells significant after correction. Reported as a
+partial improvement rather than a solution, because that is what it is.
 
 ---
 
 ## What I'd do next
 
-1. **Mean-reversion features.** The IC pattern says the feature set extrapolates
-   when it should revert. Explicit reversal features — distance from a fitted
-   equilibrium curve, spread z-scores against their own history — are the
-   indicated fix, and they are the natural counterpart to what is already there.
+1. **Push the mean-reversion work further.** Rich/cheap and reversal features
+   removed about a third of the IC degradation but did not flip its sign. The
+   residuals are currently taken against a curve fitted to that day alone;
+   measuring dislocation against a *fitted equilibrium over time* — an
+   error-correction formulation — is the natural next step.
 2. **Carry and roll-down as the benchmark.** Any forecast should be measured
    against what carry alone earns. The system computes it and does not yet use it
    as the hurdle.

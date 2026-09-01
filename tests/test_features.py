@@ -17,9 +17,11 @@ from tqe.features.builder import build_features, make_targets
 from tqe.features.macro import PUBLICATION_LAG_DAYS, apply_publication_lag, macro_features
 from tqe.features.regime import regime_features, rolling_regime_labels
 from tqe.features.technical import (
+    curve_residual_features,
     curve_shape_features,
     mean_reversion_features,
     momentum_features,
+    reversal_features,
     volatility_features,
     zscore_features,
 )
@@ -322,3 +324,96 @@ class TestBuildFeatures:
         sub = fs.slice(start=mid)
         assert sub.X.index.equals(sub.y.index)
         assert sub.index.min() >= mid
+
+
+# --------------------------------------------------------------------------- #
+# Mean-reversion blocks
+# --------------------------------------------------------------------------- #
+class TestMeanReversion:
+    """Added after measuring that the momentum features anti-predict beyond a day."""
+
+    @pytest.fixture
+    def nss(self, curve):
+        from tqe.curve.nelson_siegel import fit_nss_history_fixed
+
+        return fit_nss_history_fixed(curve)
+
+    def test_rich_cheap_matches_the_scalar_api(self, curve, nss):
+        """The vectorised residual must equal the scalar NSS evaluation.
+
+        The block computes the NSS loadings directly because the library helper
+        validates tau as a scalar while this path has a per-date vector. Same
+        formula, so the two must agree exactly.
+        """
+        from tqe.curve.nelson_siegel import NSSParams
+        from tqe.data.sources import TENOR_YEARS
+
+        rc = curve_residual_features(curve, nss)
+        d = nss.dropna(subset=["beta0"]).index[-1]
+        r = nss.loc[d]
+        p = NSSParams(r.beta0, r.beta1, r.beta2, r.beta3, r.tau1, r.tau2)
+        for tenor in ("3 Mo", "2 Yr", "10 Yr", "30 Yr"):
+            expected = (curve.loc[d, tenor] - float(p.zero_rate(TENOR_YEARS[tenor]))) * 1e4
+            assert rc.loc[d, f"rc_{tenor}"] == pytest.approx(expected, abs=1e-9)
+
+    def test_rich_cheap_residuals_are_small_and_centred(self, curve, nss):
+        """A good curve fit leaves residuals of a few basis points, not percent."""
+        rc = curve_residual_features(curve, nss)
+        cols = [c for c in rc.columns if c.startswith("rc_") and c not in
+                ("rc_dispersion", "rc_absmean", "rc_fit_rmse")]
+        vals = rc[cols].to_numpy(dtype=float)
+        vals = vals[np.isfinite(vals)]
+        assert abs(float(np.mean(vals))) < 15.0, "residuals should be roughly centred"
+        assert float(np.percentile(np.abs(vals), 95)) < 100.0, "under 100bp at the 95th pct"
+
+    def test_rich_cheap_is_causal(self, curve, nss):
+        """The NSS fit is cross-sectional per date, so the past cannot move."""
+        base = curve_residual_features(curve, nss)
+        tampered = curve.copy()
+        tampered.iloc[900:] *= 3.0
+        after = curve_residual_features(tampered, nss)
+        a = base.iloc[:900].dropna(how="all")
+        b = after.reindex(a.index)[a.columns]
+        assert np.allclose(a.to_numpy(dtype=float), b.to_numpy(dtype=float),
+                           atol=1e-12, equal_nan=True)
+
+    def test_rich_cheap_handles_missing_nss(self, curve):
+        out = curve_residual_features(curve, pd.DataFrame())
+        assert out.empty and out.index.equals(curve.index)
+
+    def test_reversal_is_the_negated_change(self, curve):
+        rev = reversal_features(curve[["10 Yr"]], windows=(5,))
+        assert np.allclose(rev["rev5_10 Yr"].dropna(),
+                           -curve["10 Yr"].diff(5).dropna())
+
+    def test_reversal_opposes_momentum(self, curve):
+        """The whole point: reversal must be the mirror of momentum."""
+        mom = momentum_features(curve[["10 Yr"]], windows=(21,))
+        rev = reversal_features(curve[["10 Yr"]], windows=(21,))
+        joined = pd.concat([mom["mom21_10 Yr"], rev["rev21_10 Yr"]], axis=1).dropna()
+        assert joined.corr().iloc[0, 1] == pytest.approx(-1.0, abs=1e-9)
+
+    def test_extension_is_volatility_scaled(self, curve):
+        """`ext` must be unit-free, so its scale cannot depend on the regime."""
+        rev = reversal_features(curve[["10 Yr"]], windows=(21,))
+        ext = rev["ext21_10 Yr"].dropna()
+        assert ext.abs().median() < 5.0
+
+    def test_reversal_is_causal(self, curve):
+        assert _past_is_unchanged(lambda d: reversal_features(d, (5, 21)), curve)
+
+    def test_blocks_appear_in_the_design_matrix(self, curve):
+        from tqe.curve.nelson_siegel import fit_nss_history_fixed
+        from tqe.data.universe import constant_maturity_total_return
+
+        cfg = Config()
+        cfg.data.core_tenors = TENORS
+        cfg.features.include_macro = False
+        cfg.features.min_feature_coverage = 0.5
+        rets = constant_maturity_total_return(curve, TENORS)
+        fs = build_features(curve, pd.DataFrame(), cfg, returns=rets,
+                            nss=fit_nss_history_fixed(curve))
+        assert any(c.startswith("rc_") for c in fs.X.columns)
+        assert any(c.startswith("rev") for c in fs.X.columns)
+        assert fs.metadata["blocks"]["reversal"]
+        assert fs.metadata["blocks"]["rich_cheap"]
