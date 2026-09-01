@@ -21,6 +21,8 @@ is checked in so the results can be read without running anything.
 | `turnover_study_v2.csv` | 54 turnover configs, re-run after the alignment fix |
 | `carry_benchmark.csv` | carry vs model vs blend, each against 40 block-sign-flip controls |
 | `structure_strategy.csv` | DV01-neutral steepeners and butterflies, funded, vs 40 controls |
+| `integration_experiment.csv` | term premium and regime conditioning vs baseline, 40 controls each |
+| `structure_strategy_cashneutral.csv` | structures funded against a bill leg (net notional zero) |
 | `charts/curve_surface.png` | the full curve 1990-2026 with inversions shaded |
 | `charts/curve_fit.png` | NSS fit vs market for the latest date, with rich/cheap residuals |
 | `charts/factors.png` | PCA loadings and cumulative level/slope/curvature paths |

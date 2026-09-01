@@ -591,6 +591,55 @@ system that turns positions into P&L**, and every experiment should go through
 it. Five separate times in this project a number was inflated by a funding
 position that a bespoke P&L path had not charged for.
 
+### Do the new modules earn their place?
+
+Four modules were added because measurements pointed at them. Building them is
+not the same as showing they help, and a system that accumulates machinery
+nothing uses is worse than a smaller one that does. Two make a testable claim
+about the signal, so they were tested
+([`scripts/integration_experiment.py`](scripts/integration_experiment.py)):
+
+| Variant | Sharpe | p | Holm | Turnover |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline | +0.140 | 0.12 | 0.61 | 22.8× |
+| **Regime conditional** | **+0.150** | 0.15 | 0.61 | **13.9×** |
+| Both | −0.005 | 0.37 | 1.00 | 14.2× |
+| + term premium | −0.149 | 0.56 | 1.00 | 15.2× |
+| Term premium alone | −0.224 | 0.83 | 1.00 | 14.3× |
+
+**0 of 5 significant after Holm correction.** Regime conditioning is the only
+variant that improves anything: same Sharpe for **39% less turnover**, which is
+real if small — damping the signal in the high-volatility state avoids trading
+into exactly the conditions where the forecast is least reliable. It is not
+significant, but it is the right sign and it is cheap.
+
+**The term premium test is not a fair one, and saying so matters more than the
+number.** A term premium is intrinsically *directional* — it says whether owning
+duration is paid — and the double-neutral book cannot hold a directional view by
+construction. Demeaning it cross-sectionally to fit that book strips out exactly
+the information it carries. The −0.22 is evidence that a term premium makes a
+poor relative-value signal, which was never its claim. Evaluating it properly
+needs a book allowed to hold duration, and therefore a different answer to the
+funding question than this project has.
+
+### The cash-neutral result, in full
+
+`portfolio/funding.py` does what it claims: a doubly-neutral 2s10s steepener has
+exactly zero net notional and zero net DV01, pays **$0** funding against the raw
+structure's $559/day at 5%, is exactly immune to a parallel shift, and retains
+**95%** of the steepening P&L.
+
+It still does not rescue the strategy — Sharpe **−1.70** funded against **+0.04**
+unfunded — and the mechanism is worth more than the result. Cash-neutralising
+adds a large near-riskless bill leg to the *denominator* of the return, so the
+structures retain only **56–93%** of their volatility. Vol targeting levers up to
+compensate, and transaction costs scale with **notional**, not with risk. A 28.4%
+financing drag becomes an 8.6% cost drag.
+
+**The funding cost of a DV01-neutral curve trade is intrinsic.** You can move it
+between line items; you cannot construct it away. That is the single most useful
+thing this project learned about why curve trades are harder than they look.
+
 ---
 
 ## What I'd do next
