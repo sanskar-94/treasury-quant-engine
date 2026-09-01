@@ -16,6 +16,7 @@ is checked in so the results can be read without running anything.
 | `turnover_study.csv` | 72 turnover-control configurations, scored at 1x and 2x assumed costs |
 | `horizon_experiment.csv` | 6 target x horizon cells (momentum features only), 40 block-sign-flip controls, Holm-corrected |
 | `horizon_experiment_v2.csv` | the same six cells after adding rich/cheap and reversal features |
+| `carry_benchmark.csv` | carry vs model vs blend, each against 40 block-sign-flip controls |
 
 **Read the two study files first** if you are checking whether the headline was
 cherry-picked. Together they are the 136 configurations that feed the deflated

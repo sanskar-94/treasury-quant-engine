@@ -394,6 +394,41 @@ a weekly or monthly target, which is the direction the horizon results point in.
 A feature that helps at one horizon and hurts at another is a configuration
 decision, not a bug — but only if the measurement is written down.
 
+### The benchmark that actually matters: carry
+
+Comparing a rates model to cash, or to buy-and-hold, flatters it. The honest
+benchmark is **carry** — the yield pickup over funding plus the roll down the
+curve — because that is the dominant systematic return driver in fixed income
+and it requires no model at all. A mechanical carry signal was built and put
+through the identical evaluation
+([`scripts/benchmark_carry.py`](scripts/benchmark_carry.py)):
+
+| Signal | Sharpe | p vs own controls | Turnover |
+| --- | ---: | ---: | ---: |
+| Carry alone | −0.18 | 0.81 | 8.2× |
+| Model alone | **+0.05** | 0.27 | 18.5× |
+| Carry + model | −0.19 | 0.73 | 11.3× |
+
+The model beats carry — but only because **carry itself lost money over this
+window**, and neither is remotely significant. The blend is worse than either,
+so the forecast adds nothing to carry.
+
+Carry's failure is not noise, it is regime. Year by year against the 2s10s slope:
+
+| Year | Carry return | 2s10s (year-end) |
+| --- | ---: | ---: |
+| 2020 | **+1.79%** | +80bp |
+| 2021 | −3.44% | +79bp |
+| 2022 | **−4.29%** | **−53bp** |
+| 2023 | +0.24% | −35bp |
+| 2025 | **+2.05%** | +71bp |
+
+A relative-value carry book is long the carry-rich part of the curve, which is
+the long end — and the long end is exactly what sells off when a hiking cycle
+inverts the curve. Carry is a regime-dependent factor, not a free lunch, and
+2018–2026 contained the worst regime for it in four decades. That is worth
+knowing before concluding that a model "beat carry".
+
 ---
 
 ## What I'd do next
@@ -403,9 +438,10 @@ decision, not a bug — but only if the measurement is written down.
    residuals are currently taken against a curve fitted to that day alone;
    measuring dislocation against a *fitted equilibrium over time* — an
    error-correction formulation — is the natural next step.
-2. **Carry and roll-down as the benchmark.** Any forecast should be measured
-   against what carry alone earns. The system computes it and does not yet use it
-   as the hurdle.
+2. **Regime-conditional carry.** Carry works when the curve is steep and stable
+   and fails through an inversion. Conditioning it on the slope regime — which
+   the feature set already labels — is the obvious refinement, and more likely to
+   pay than another learner.
 3. **A term-premium model.** The directional question — should you be long
    duration at all — is better answered by a term-premium estimate (ACM-style)
    than by daily return forecasting.
