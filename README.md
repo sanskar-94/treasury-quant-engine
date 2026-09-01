@@ -169,15 +169,16 @@ reassuring and is easy to accept.
 src/tqe/
 ├── pricing/       bond maths — day counts, price/yield, duration, convexity, DV01, KRD
 ├── data/          Treasury.gov + FRED loaders, SIFMA calendar, total-return universe
-├── curve/         Nelson-Siegel-Svensson, bootstrapping, PCA
+├── curve/         Nelson-Siegel-Svensson, bootstrapping, PCA, dynamic NS + VAR
 ├── features/      technical, macro (lag-aware), regime blocks → design matrix
 ├── models/        ridge/elastic-net/RF/GBM + baselines, stacked ensemble, registry
-├── training/      walk-forward splits with purging, metrics, training harness
+├── training/      walk-forward splits with purging, metrics, nested tuning
 ├── signals/       forecast → signal → DV01-sized position
-├── portfolio/     mean-variance optimiser, covariance, VaR/ES, stress scenarios
-├── backtest/      event-driven engine, 32nds cost model, financing, tearsheets
+├── portfolio/     optimiser, covariance, VaR/ES, stress, RV structures, KRD hedging
+├── backtest/      event-driven engine, 32nds costs, financing, attribution, tearsheets
 ├── execution/     broker protocol, paper broker, Alpaca adapter, risk gate, OMS
 ├── live/          daily trading loop
+├── viz/           curve, factor, attribution and signal diagnostics
 ├── api/           FastAPI service
 └── cli.py         tqe data | curve | features | train | backtest | predict | trade | serve
 ```
@@ -429,11 +430,72 @@ inverts the curve. Carry is a regime-dependent factor, not a free lunch, and
 2018–2026 contained the worst regime for it in four decades. That is worth
 knowing before concluding that a model "beat carry".
 
+### A dynamic term-structure model, and the trap for the third time
+
+Forecasting nine tenors separately is backwards for a yield curve, which is one
+object with three degrees of freedom rather than nine loosely related assets.
+[`curve/dynamic.py`](src/tqe/curve/dynamic.py) implements the Diebold-Li
+two-step: fix the decay so the Nelson-Siegel betas are identified, then fit a
+VAR to the factor series and iterate it forward. Three persistent factors
+instead of nine noisy returns, and every forecast is a curve the model can
+actually produce.
+
+It works, on its own terms. Rolling out-of-sample over 9,172 days in 1.4
+seconds, the predicted one-day yield change has an **IC of +0.0295, positive on
+all nine tenors** — matching the entire 482-feature ML pipeline with three
+factors and no feature engineering at all.
+
+Run as a directional strategy it looked better still:
+
+| | Sharpe | Turnover |
+| --- | ---: | ---: |
+| ML ensemble | +0.12 | 20.9× |
+| **DNS VAR** | **+0.41** | 6.7× |
+
+**And then it collapsed.** Under the double-neutral funded construction — zero
+net cash, zero net DV01 — DNS scores **−0.18 (p = 0.61)** against its own
+block-sign-flip controls, worse than the ML model's +0.05. The +0.41 was the
+funding channel again.
+
+That is the third time this project produced an impressive number that was a
+funding position wearing a forecast's clothes: once for the ensemble, once for
+carry, once for DNS. The pattern is worth naming, because it is not obvious and
+it is not rare — **any signal with a persistent directional tilt will pick up
+the cash-versus-duration trade, and over 2018–2026 that trade paid.** The only
+defence is to neutralise the channel before measuring, every time, without
+exception.
+
+### Where the P&L actually came from
+
+[`backtest/attribution.py`](src/tqe/backtest/attribution.py) decomposes realised
+P&L two ways, both reconciling to the engine's own numbers to 1e-11.
+
+By source, annualised: market P&L **+2.78%**, financing **−2.56%**, costs
+**−0.09%**, net **+0.14%**. By curve factor:
+
+| Factor | Annualised P&L | Share of gross risk |
+| --- | ---: | ---: |
+| Level | **−0.10%** | 42.1% |
+| Slope | **+0.42%** | 33.1% |
+| Curvature | **+0.24%** | 13.7% |
+| Residual | +0.03% | 11.1% |
+
+Three factors explain 93.8% of the P&L variance. The model earns on **slope and
+curvature** and loses on **level** — it has curve-shape skill and no directional
+skill, while carrying its largest risk exposure precisely where it has no edge.
+That is a specific, actionable diagnosis, and it is invisible in a Sharpe ratio.
+
 ---
 
 ## What I'd do next
 
-1. **Push the mean-reversion work further.** Rich/cheap and reversal features
+1. **Neutralise first, measure second.** The attribution says the edge is in
+   slope and curvature while the risk is in level. Building the book on the
+   structures in [`portfolio/structures.py`](src/tqe/portfolio/structures.py) —
+   DV01-neutral steepeners and butterflies — expresses only the part the model
+   is good at, instead of expressing it and then projecting the level exposure
+   away afterwards.
+2. **Push the mean-reversion work further.** Rich/cheap and reversal features
    removed about a third of the IC degradation but did not flip its sign. The
    residuals are currently taken against a curve fitted to that day alone;
    measuring dislocation against a *fitted equilibrium over time* — an
@@ -442,13 +504,13 @@ knowing before concluding that a model "beat carry".
    and fails through an inversion. Conditioning it on the slope regime — which
    the feature set already labels — is the obvious refinement, and more likely to
    pay than another learner.
-3. **A term-premium model.** The directional question — should you be long
+4. **A term-premium model.** The directional question — should you be long
    duration at all — is better answered by a term-premium estimate (ACM-style)
    than by daily return forecasting.
-4. **The stacked ensemble shrinks hard** — NNLS weights sum to ~0.003, so its raw
+5. **The stacked ensemble shrinks hard** — NNLS weights sum to ~0.003, so its raw
    output carries almost no scale. A calibrated formulation would be cleaner than
    the `scale_to_return_units` rescaling that currently patches it.
-5. **ETF proxies, not cash bonds.** Execution maps tenors onto SHY/IEI/IEF/TLT
+6. **ETF proxies, not cash bonds.** Execution maps tenors onto SHY/IEI/IEF/TLT
    because they are reachable from a retail broker; durations are approximate.
 
 ---

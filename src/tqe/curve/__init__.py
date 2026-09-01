@@ -10,6 +10,14 @@ from .bootstrap import (
     zero_to_discount,
     zero_to_forward,
 )
+from .dynamic import (
+    DNSParams,
+    VARModel,
+    beta_to_yields,
+    dns_forecast,
+    dns_forecast_history,
+    fit_var,
+)
 from .nelson_siegel import (
     DIEBOLD_LI_TAU1,
     SVENSSON_FIXED_TAU2,
@@ -33,5 +41,7 @@ __all__ = [
     "fit_nss_history", "fit_nss_history_fixed", "DIEBOLD_LI_TAU1", "SVENSSON_FIXED_TAU2",
     "par_to_zero", "zero_to_discount", "discount_to_zero", "zero_to_forward",
     "interpolate_curve", "forward_rate", "bootstrap_history", "zero_curve_function",
+    "DNSParams", "VARModel", "fit_var", "dns_forecast", "dns_forecast_history",
+    "beta_to_yields",
     "CurvePCA", "fit_curve_pca", "rolling_pca_factors", "reconstruction_error", "FACTOR_NAMES",
 ]

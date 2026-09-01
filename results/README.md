@@ -17,6 +17,11 @@ is checked in so the results can be read without running anything.
 | `horizon_experiment.csv` | 6 target x horizon cells (momentum features only), 40 block-sign-flip controls, Holm-corrected |
 | `horizon_experiment_v2.csv` | the same six cells after adding rich/cheap and reversal features |
 | `carry_benchmark.csv` | carry vs model vs blend, each against 40 block-sign-flip controls |
+| `charts/curve_surface.png` | the full curve 1990-2026 with inversions shaded |
+| `charts/curve_fit.png` | NSS fit vs market for the latest date, with rich/cheap residuals |
+| `charts/factors.png` | PCA loadings and cumulative level/slope/curvature paths |
+| `charts/attribution.png` | cumulative P&L by curve factor, and share of gross risk |
+| `charts/signal_diagnostics.png` | signal persistence, distribution and turnover |
 
 **Read the two study files first** if you are checking whether the headline was
 cherry-picked. Together they are the 136 configurations that feed the deflated
