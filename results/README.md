@@ -14,6 +14,7 @@ is checked in so the results can be read without running anything.
 | `walk_forward_folds.csv` | per-fold out-of-sample RMSE, IC, rank-IC and directional accuracy |
 | `parameter_study.csv` | 64 signal-transform configurations |
 | `turnover_study.csv` | 72 turnover-control configurations, scored at 1x and 2x assumed costs |
+| `horizon_experiment.csv` | 6 target x horizon cells, each against 40 block-sign-flip controls, with Holm-corrected p-values |
 
 **Read the two study files first** if you are checking whether the headline was
 cherry-picked. Together they are the 136 configurations that feed the deflated

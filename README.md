@@ -307,21 +307,75 @@ controls:
 
 ---
 
+## Following up the negative result
+
+The two most obvious explanations for the failure — wrong horizon, wrong target
+definition — were tested rather than left as speculation
+([`scripts/experiment_horizons.py`](scripts/experiment_horizons.py), results in
+[`results/horizon_experiment.csv`](results/horizon_experiment.csv)).
+
+Six cells: `{total_return, relative_return}` × `{1, 5, 21}` day horizons. Each is
+walk-forward trained, then evaluated as a **double-neutral funded book** (zero
+net cash, zero net DV01, costs and financing charged) against 40 controls.
+
+**Information coefficient by horizon:**
+
+| Target | 1 day | 5 days | 21 days |
+| --- | ---: | ---: | ---: |
+| `total_return` | **+0.025** | −0.072 | −0.174 |
+| `relative_return` | **+0.021** | −0.084 | −0.191 |
+
+The edge is confined to one day and **reverses** as the horizon lengthens — for
+both target definitions, monotonically. That is what a momentum-heavy feature
+set does on an asset that mean-reverts over weeks: it keeps extrapolating a move
+that has already turned. Longer horizons do not rescue this model; they invert it.
+
+**Significance, after correcting for having looked six times:**
+
+| | |
+| --- | ---: |
+| Nominally significant (p ≤ 0.10) | 1 / 6 |
+| Significant after Holm correction | **0 / 6** |
+| P(at least one p < 0.05 by luck across 6 tests) | 26% |
+
+The single nominal hit (`total_return`, h=5, p = 0.049) has an IC of **−0.072**.
+A model that anti-predicts its own target while appearing to make money is
+reporting luck, and one such cell out of six is exactly the yield of pure chance.
+
+### The null had to be rebuilt first
+
+The initial run used time-shuffled predictions as the control and reported 2 of 6
+cells significant. **That was wrong.** Shuffling preserves each tenor's *mean*
+prediction, and because the raw forecasts rise monotonically with maturity, a
+shuffled signal smoothed over ten days becomes a large near-static curve tilt —
+the shuffled books held −$18mm of 3-month against +$10mm of 1-year, roughly ten
+times more concentrated than the real book. The controls were a different and
+more aggressive strategy, not an absence of signal, and their Sharpe was not
+centred on zero.
+
+The null used instead is a **block sign-flip**: multiply the finished signal by a
+random ±1 drawn once per 63-day block. That preserves magnitude, autocorrelation,
+persistence and cross-sectional shape — everything except alignment with future
+returns, which is the hypothesis under test. With a valid null the placebo means
+sit within ±0.11 of zero and the apparent findings disappear.
+
+---
+
 ## What I'd do next
 
-1. **Longer horizons.** Daily rates forecasting is close to a coin flip. The IC
-   is real but tiny; weekly or monthly targets have a better signal-to-noise
-   ratio and would be taxed far less by turnover.
-2. **Relative value, not direction.** The one place the pipeline showed anything
-   was cross-sectional. Building the target as *relative* tenor performance from
-   the outset, rather than forecasting absolute returns and subtracting
-   afterwards, is the natural next design.
-3. **Carry and roll-down as the baseline.** Any forecast should be measured
-   against what carry alone earns, which this system computes but does not yet
-   use as the benchmark.
-4. **The stacked ensemble shrinks hard** — NNLS weights sum to ~0.003, so its
-   raw output carries almost no scale. A calibrated formulation would be cleaner
-   than the `scale_to_return_units` rescaling that currently patches it.
+1. **Mean-reversion features.** The IC pattern says the feature set extrapolates
+   when it should revert. Explicit reversal features — distance from a fitted
+   equilibrium curve, spread z-scores against their own history — are the
+   indicated fix, and they are the natural counterpart to what is already there.
+2. **Carry and roll-down as the benchmark.** Any forecast should be measured
+   against what carry alone earns. The system computes it and does not yet use it
+   as the hurdle.
+3. **A term-premium model.** The directional question — should you be long
+   duration at all — is better answered by a term-premium estimate (ACM-style)
+   than by daily return forecasting.
+4. **The stacked ensemble shrinks hard** — NNLS weights sum to ~0.003, so its raw
+   output carries almost no scale. A calibrated formulation would be cleaner than
+   the `scale_to_return_units` rescaling that currently patches it.
 5. **ETF proxies, not cash bonds.** Execution maps tenors onto SHY/IEI/IEF/TLT
    because they are reachable from a retail broker; durations are approximate.
 

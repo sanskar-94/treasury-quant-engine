@@ -94,9 +94,28 @@ def make_targets(
     earns if held.
 
     ``target="direction"`` emits ``{0, 1}`` for a classification setup.
+
+    **Relative targets.** ``target="relative_return"`` subtracts the
+    cross-sectional mean, so the model forecasts which tenor *outperforms the
+    curve* rather than where rates go. This matters because a directional
+    forecast has to beat the funding rate to be worth anything, whereas a
+    relative-value book is cash- and duration-neutral by construction and pays
+    almost no financing. On this dataset the directional target produced a
+    strategy whose entire positive return came from a funding position; the
+    relative target removes that channel entirely, so whatever it earns is
+    forecast quality and nothing else.
+
+    ``target="excess_return"`` subtracts the shortest tenor's return instead,
+    which is the closest thing here to a return over cash.
     """
     tenors = list(tenors) if tenors else list(returns)
     cols: dict[str, pd.Series] = {}
+
+    # Relative targets are built from an underlying return series, then
+    # demeaned across the cross-section AFTER the forward shift - demeaning
+    # before would mix information across dates.
+    relative = target in ("relative_return", "excess_return")
+    base_field = "total_return" if relative else target
 
     for tenor in tenors:
         frame = returns.get(tenor)
@@ -108,19 +127,30 @@ def make_targets(
             cols[tenor] = (fwd.shift(-horizon) > 0).astype(float).where(fwd.shift(-horizon).notna())
             continue
 
-        if target not in frame.columns:
+        if base_field not in frame.columns:
             raise KeyError(f"Target {target!r} not in the analytics frame for {tenor}")
-        base = frame[target]
+        base = frame[base_field]
 
         if horizon == 1:
             cols[tenor] = base.shift(-1)
-        elif target in ("price_return", "total_return"):
+        elif base_field in ("price_return", "total_return"):
             compounded = (1.0 + base).rolling(horizon).apply(np.prod, raw=True) - 1.0
             cols[tenor] = compounded.shift(-horizon)
         else:  # yield_change and other additive quantities
             cols[tenor] = base.rolling(horizon).sum().shift(-horizon)
 
     out = pd.DataFrame(cols)
+
+    if target == "relative_return":
+        # Row-wise, so it uses only that date's own cross-section.
+        out = out.sub(out.mean(axis=1), axis=0)
+    elif target == "excess_return":
+        from ..data.sources import TENOR_YEARS
+
+        known = [c for c in out.columns if c in TENOR_YEARS]
+        if known:
+            short = min(known, key=lambda c: TENOR_YEARS[c])
+            out = out.sub(out[short], axis=0)
     out.index.name = "date"
     return out
 

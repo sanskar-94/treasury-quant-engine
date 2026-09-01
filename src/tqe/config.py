@@ -125,7 +125,10 @@ class FeatureConfig:
 class ModelConfig:
     """Learner selection and hyper-parameters."""
 
-    target: str = "price_return"  # price_return | yield_change | direction
+    # price_return | total_return | yield_change | direction
+    #   | relative_return  (return minus the cross-sectional mean - relative value)
+    #   | excess_return    (return minus the shortest tenor - return over cash)
+    target: str = "price_return"
     horizon: int = 1  # business days ahead
     # Which base learners take part in the stacked ensemble.
     learners: list[str] = field(
