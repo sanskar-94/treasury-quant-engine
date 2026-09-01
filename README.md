@@ -365,19 +365,34 @@ disappear.
 The IC pattern is not just a failure, it is a *diagnosis* — a momentum-heavy
 feature set extrapolating a move that has already turned. So the indicated fix
 was built and measured: **rich/cheap residuals** (market yield minus the
-NSS-fitted yield, in bp — the canonical rates relative-value signal, and machinery
-the project already had but was throwing away) plus explicit **reversal,
-acceleration and volatility-scaled extension** features. 482 features became 613.
+NSS-fitted yield, in bp — the canonical rates relative-value signal, and
+machinery the project already had but was throwing away) plus explicit
+**reversal, acceleration and volatility-scaled extension** features. 482
+features became 613.
 
 | IC | 1 day | 5 days | 21 days |
 | --- | ---: | ---: | ---: |
 | Momentum only | +0.025 | −0.072 | −0.174 |
 | **+ mean reversion** | +0.024 | **−0.046** | **−0.132** |
 
-The diagnosis was right and the fix works in the right direction — roughly a
-third of the degradation removed at both horizons — but it is **not enough to
-flip the sign**. Still 0 of 6 cells significant after correction. Reported as a
-partial improvement rather than a solution, because that is what it is.
+The diagnosis was right and the fix works where it was aimed — roughly a third of
+the degradation removed at 5 and 21 days. It is **not enough to flip the sign**,
+and 0 of 6 cells remain significant after correction.
+
+**And at the horizon this system actually ships with, it made things worse.**
+Retraining the full ensemble on all 613 features:
+
+| | 482 features | 613 features |
+| --- | ---: | ---: |
+| Pooled OOS IC (h=1) | **+0.029** | +0.011 |
+| Backtest Sharpe (funded) | **+0.12** | −0.06 |
+
+The extra 131 features are mostly noise at daily frequency, and the stacked
+ensemble had less signal to work with, not more. So the blocks ship **default
+off**, with the config comment recording exactly when to turn them on: alongside
+a weekly or monthly target, which is the direction the horizon results point in.
+A feature that helps at one horizon and hurts at another is a configuration
+decision, not a bug — but only if the measurement is written down.
 
 ---
 

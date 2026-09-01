@@ -402,7 +402,10 @@ class TestMeanReversion:
     def test_reversal_is_causal(self, curve):
         assert _past_is_unchanged(lambda d: reversal_features(d, (5, 21)), curve)
 
-    def test_blocks_appear_in_the_design_matrix(self, curve):
+    def test_blocks_appear_when_enabled(self, curve):
+        """They ship default-off because they dilute the daily signal, so the
+        test has to turn them on explicitly - which is also the documented way
+        to use them, alongside a longer horizon."""
         from tqe.curve.nelson_siegel import fit_nss_history_fixed
         from tqe.data.universe import constant_maturity_total_return
 
@@ -410,6 +413,8 @@ class TestMeanReversion:
         cfg.data.core_tenors = TENORS
         cfg.features.include_macro = False
         cfg.features.min_feature_coverage = 0.5
+        cfg.features.include_reversal = True
+        cfg.features.include_rich_cheap = True
         rets = constant_maturity_total_return(curve, TENORS)
         fs = build_features(curve, pd.DataFrame(), cfg, returns=rets,
                             nss=fit_nss_history_fixed(curve))
@@ -417,3 +422,9 @@ class TestMeanReversion:
         assert any(c.startswith("rev") for c in fs.X.columns)
         assert fs.metadata["blocks"]["reversal"]
         assert fs.metadata["blocks"]["rich_cheap"]
+
+    def test_blocks_are_off_by_default(self, curve):
+        """The shipped default at h=1, justified in the config comment."""
+        cfg = Config()
+        assert not cfg.features.include_reversal
+        assert not cfg.features.include_rich_cheap

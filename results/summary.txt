@@ -11,6 +11,6 @@ Ann. turnover        20.93x
 Total costs         73,418  (0.09% p.a.)
 Financing        2,044,955  (2.56% p.a.)
 Sharpe (gross)        2.43
-Deflated Sharpe     0.0107
+Deflated Sharpe     0.0102
 Canary Sharpe        14.65  (perfect foresight; honest/canary = 0.009)
 Benchmark Sharpe      0.18

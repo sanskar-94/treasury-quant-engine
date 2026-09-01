@@ -31,8 +31,10 @@ features:
   include_curve_shape: true
   include_carry_rolldown: true
   include_regime: true
-  include_reversal: true      # counterweight to momentum (see config.py)
-  include_rich_cheap: true    # market yield minus NSS-fitted yield, in bp
+  # Mean-reversion blocks: help at horizons >= 5 days, dilute the signal at
+  # h=1 (IC +0.029 -> +0.011). Turn on together with a longer model.horizon.
+  include_reversal: false
+  include_rich_cheap: false
   reversal_windows: [5, 21, 63]
   momentum_windows: [1, 5, 10, 21, 63, 126, 252]
   vol_windows: [10, 21, 63, 252]

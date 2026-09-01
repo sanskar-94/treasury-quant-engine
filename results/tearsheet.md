@@ -37,8 +37,8 @@ These are the numbers that decide whether the headline means anything.
 
 | Check | Value | Reading |
 | --- | ---: | --- |
-| Configurations searched | 136 | feeds the deflation below |
-| Deflated Sharpe ratio | 0.0107 | probability the Sharpe survives multiple testing |
+| Configurations searched | 142 | feeds the deflation below |
+| Deflated Sharpe ratio | 0.0102 | probability the Sharpe survives multiple testing |
 | Perfect-foresight Sharpe | 14.65 | honest/foresight = 0.009; clean - the honest run is a small fraction of perfect foresight |
 | Benchmark Sharpe | 0.18 | buy-and-hold duration |
 | Information ratio | -0.17 | active return per unit tracking error |

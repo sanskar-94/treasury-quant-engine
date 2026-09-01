@@ -108,11 +108,23 @@ class FeatureConfig:
     include_carry_rolldown: bool = True
     include_regime: bool = True
     regime_states: int = 3
-    # Mean-reversion blocks. Added after measuring that the momentum features
-    # anti-predict at horizons beyond one day (IC +0.025 -> -0.072 -> -0.174 at
-    # 1/5/21 days); these are the counterweight.
-    include_reversal: bool = True
-    include_rich_cheap: bool = True
+    # Mean-reversion blocks: rich/cheap versus the fitted curve, plus explicit
+    # reversal, acceleration and volatility-scaled extension.
+    #
+    # DEFAULT OFF, and the reason is measured rather than assumed. They were
+    # added because the momentum features anti-predict beyond one day
+    # (IC +0.025 -> -0.072 -> -0.174 at 1/5/21 days) and they do help there,
+    # cutting the degradation by about a third (-> -0.046 / -0.132). But at the
+    # one-day horizon this system ships with they *dilute* the signal: pooled
+    # out-of-sample IC fell from +0.029 to +0.011 and the backtest Sharpe from
+    # +0.12 to -0.06 once they were included. 482 features became 613 and the
+    # extra 131 were mostly noise at daily frequency.
+    #
+    # So: turn these ON when moving to a weekly or monthly target, which is the
+    # direction the results point in. Leave them off at h=1.
+    # Evidence: results/horizon_experiment.csv vs horizon_experiment_v2.csv.
+    include_reversal: bool = False
+    include_rich_cheap: bool = False
     reversal_windows: list[int] = field(default_factory=lambda: [5, 21, 63])
     # Minimum fraction of the sample a feature must cover to be kept.  This is
     # the main lever on the history/breadth trade-off: several FRED series start
