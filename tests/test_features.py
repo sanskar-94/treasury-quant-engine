@@ -230,23 +230,52 @@ class TestTargets:
 
         return constant_maturity_total_return(curve, TENORS)
 
-    def test_target_is_the_next_days_return(self, curve):
+    def test_target_is_the_return_over_day_t(self, curve):
+        """The alignment contract: X is already lagged, so y must NOT lead.
+
+        Pinning this because getting it wrong cost this project three quarters
+        of its signal - the model forecast t+1 while the backtest traded t.
+        """
         rets = self._returns(curve)
         y = make_targets(rets, "price_return", horizon=1, tenors=["10 Yr"])
         realised = rets["10 Yr"]["price_return"]
-        # row t of y must equal the return realised on t+1
-        assert y["10 Yr"].iloc[10] == pytest.approx(realised.iloc[11])
+        assert y["10 Yr"].iloc[10] == pytest.approx(realised.iloc[10])
+        assert (y["10 Yr"] - realised).abs().max() == pytest.approx(0.0, abs=1e-15)
 
-    def test_last_row_target_is_nan(self, curve):
-        y = make_targets(self._returns(curve), "price_return", 1, ["10 Yr"])
-        assert pd.isna(y["10 Yr"].iloc[-1]), "there is no tomorrow for the final row"
+    def test_horizon_one_target_has_no_trailing_nan(self, curve):
+        """With no lead, the final row is a real observation."""
+        rets = self._returns(curve)
+        y = make_targets(rets, "price_return", 1, ["10 Yr"])
+        realised = rets["10 Yr"]["price_return"]
+        assert pd.isna(y["10 Yr"].iloc[-1]) == pd.isna(realised.iloc[-1])
 
-    def test_multi_day_horizon_compounds(self, curve):
+    def test_multi_day_horizon_compounds_from_t(self, curve):
+        """A position opened at t and held h days earns t .. t+h-1."""
         rets = self._returns(curve)
         y = make_targets(rets, "total_return", horizon=5, tenors=["10 Yr"])
         r = rets["10 Yr"]["total_return"]
-        expected = float((1 + r.iloc[11:16]).prod() - 1)
+        expected = float((1 + r.iloc[10:15]).prod() - 1)
         assert y["10 Yr"].iloc[10] == pytest.approx(expected, abs=1e-12)
+
+    def test_features_and_target_do_not_double_shift(self, curve):
+        """End-to-end: the model's prediction must line up with the traded day.
+
+        X[t] holds t-1 information and y[t] holds day t's return, so the pair is
+        a one-step-ahead forecast. Shifting both would aim it a day too far.
+        """
+        from tqe.data.universe import constant_maturity_total_return, universe_panel
+
+        cfg = Config()
+        cfg.data.core_tenors = TENORS
+        cfg.features.include_macro = False
+        cfg.features.include_regime = False
+        cfg.features.min_feature_coverage = 0.5
+        rets = constant_maturity_total_return(curve, TENORS)
+        fs = build_features(curve, pd.DataFrame(), cfg, returns=rets)
+
+        realised = universe_panel(rets, "price_return")["10 Yr"]
+        aligned = realised.reindex(fs.index)
+        assert (fs.y["10 Yr"] - aligned).abs().max() == pytest.approx(0.0, abs=1e-15)
 
     def test_direction_target_is_binary(self, curve):
         y = make_targets(self._returns(curve), "direction", 1, ["10 Yr"]).dropna()

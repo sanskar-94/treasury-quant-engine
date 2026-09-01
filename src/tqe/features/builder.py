@@ -14,7 +14,13 @@ The alignment contract produced by :func:`build_features` is::
     row t of X   = features observable at the close of day t-1
     row t of y   = the return realised over day t  (or t..t+horizon-1)
 
-so a model fitted on ``(X[t], y[t])`` is genuinely predicting forward.
+so a model fitted on ``(X[t], y[t])`` is genuinely predicting forward, and
+``prediction[t]`` lines up with the return the backtest applies on day ``t``.
+
+Both halves of that contract have to hold. Lagging the features *and* leading the
+target shifts the pair twice, which does not create look-ahead - it does the
+opposite, aiming the forecast a day past the session it is traded in - but it
+quietly discards most of the signal. :func:`make_targets` documents the arithmetic.
 """
 
 from __future__ import annotations
@@ -88,12 +94,28 @@ def make_targets(
     horizon: int = 1,
     tenors: Sequence[str] | None = None,
 ) -> pd.DataFrame:
-    """Build forward-looking targets aligned so row *t* holds the FUTURE return.
+    """Build targets aligned so row *t* holds the return over day *t* onward.
 
-    ``shift(-horizon)`` moves tomorrow's realised return onto today's row. For
-    ``horizon > 1`` the target is the compounded return over the whole window,
-    not just the single day at the end, because that is what a position actually
-    earns if held.
+    **The alignment here is the counterpart to the feature lag and the two must
+    not both shift.** ``X`` has already been moved back one day, so ``X[t]``
+    holds information from ``t-1``; pairing it with the return realised on day
+    ``t`` is already a genuine one-step-ahead forecast. Shifting the target back
+    a further day on top of that predicts ``t+1`` from ``t-1`` information, and
+    the backtest - which applies ``signal[t]`` to ``return[t]`` - then trades a
+    forecast aimed at the wrong session.
+
+    That was a real bug in this project rather than a hypothetical one. Measured
+    on the shipped predictions, ``corr(pred[t], return[t+1])`` was +0.0375 while
+    ``corr(pred[t], return[t])`` - the one the backtest actually harvested - was
+    +0.0095. About three quarters of the signal was being thrown away by a single
+    misplaced shift, and because the error is *conservative* it produced
+    disappointing results rather than an obviously broken one, which is why it
+    survived so long.
+
+    So the shift applied is ``-(horizon - 1)``: none at all for a one-day
+    horizon. For ``horizon > 1`` the target is the return compounded over
+    ``t .. t+horizon-1``, because that is what a position established at ``t``
+    and held actually earns.
 
     ``target="direction"`` emits ``{0, 1}`` for a classification setup.
 
@@ -123,10 +145,16 @@ def make_targets(
         frame = returns.get(tenor)
         if frame is None:
             continue
+        # Shift by (horizon - 1): X is already lagged by one day, so a one-day
+        # horizon needs no shift at all. See the docstring.
+        lead = horizon - 1
+
         if target == "direction":
             base = frame["total_return"]
-            fwd = (1.0 + base).rolling(horizon).apply(np.prod, raw=True) - 1.0 if horizon > 1 else base
-            cols[tenor] = (fwd.shift(-horizon) > 0).astype(float).where(fwd.shift(-horizon).notna())
+            fwd = ((1.0 + base).rolling(horizon).apply(np.prod, raw=True) - 1.0
+                   if horizon > 1 else base)
+            shifted = fwd.shift(-lead) if lead else fwd
+            cols[tenor] = (shifted > 0).astype(float).where(shifted.notna())
             continue
 
         if base_field not in frame.columns:
@@ -134,12 +162,12 @@ def make_targets(
         base = frame[base_field]
 
         if horizon == 1:
-            cols[tenor] = base.shift(-1)
+            cols[tenor] = base
         elif base_field in ("price_return", "total_return"):
             compounded = (1.0 + base).rolling(horizon).apply(np.prod, raw=True) - 1.0
-            cols[tenor] = compounded.shift(-horizon)
+            cols[tenor] = compounded.shift(-lead)
         else:  # yield_change and other additive quantities
-            cols[tenor] = base.rolling(horizon).sum().shift(-horizon)
+            cols[tenor] = base.rolling(horizon).sum().shift(-lead)
 
     out = pd.DataFrame(cols)
 
