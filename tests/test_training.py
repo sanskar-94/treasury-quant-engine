@@ -359,14 +359,23 @@ class TestBacktest:
         assert r.costs.sum() == pytest.approx(0.0)
 
     def test_perfect_foresight_canary_beats_a_random_signal(self):
-        """The canary must represent an unreachable ceiling."""
+        """The canary must represent an unreachable ceiling.
+
+        Compared on a cash-neutral basis: both the canary and the strategy are
+        stripped of their funding position, so this measures forecasting skill
+        rather than who happened to be on the right side of the repo rate.
+        """
         from tqe.backtest.engine import run_backtest
 
         idx, tenors, rets, dv01 = self._panels()
         rng = np.random.default_rng(11)
         sig = pd.DataFrame(rng.normal(size=(len(idx), 3)), index=idx, columns=tenors)
-        r = run_backtest(sig, rets, dv01, Config(), run_canary=True)
-        assert r.metrics["lookahead_canary_sharpe"] > abs(r.metrics["sharpe"])
+        neutral = sig.sub(sig.mean(axis=1), axis=0)
+        r = run_backtest(neutral, rets, dv01, Config(), run_canary=True)
+        assert r.metrics["lookahead_canary_sharpe"] > abs(r.metrics["sharpe"]), (
+            f"canary {r.metrics['lookahead_canary_sharpe']:.2f} should exceed "
+            f"|honest| {abs(r.metrics['sharpe']):.2f}"
+        )
 
     def test_leverage_cap_is_respected(self):
         """The bug that made this project's first backtest meaningless."""
@@ -403,3 +412,110 @@ class TestBacktest:
         sig = pd.DataFrame(0.0, index=idx, columns=["GBP", "EUR"])
         with pytest.raises(ValueError):
             run_backtest(sig, rets, dv01, Config())
+
+
+# --------------------------------------------------------------------------- #
+# Financing
+# --------------------------------------------------------------------------- #
+class TestFinancing:
+    """Regression tests for the most expensive bug this project had.
+
+    The backtest originally computed a *total* return and called it a strategy
+    return, charging nothing for the money used to hold the positions. Because a
+    three-month bill is nearly riskless, an unfunded backtest scored holding
+    cash at a Sharpe above 12, and any strategy with a net long bias inherited a
+    large fictitious edge. These tests exist so that cannot come back.
+    """
+
+    @staticmethod
+    def _panels(n=500, seed=7):
+        rng = np.random.default_rng(seed)
+        idx = pd.bdate_range("2020-01-01", periods=n)
+        tenors = ["2 Yr", "10 Yr"]
+        rets = pd.DataFrame(rng.normal(0.00002, 0.002, (n, 2)), index=idx, columns=tenors)
+        dv01 = pd.DataFrame({"2 Yr": 0.019, "10 Yr": 0.081}, index=idx, columns=tenors)
+        return idx, tenors, rets, dv01
+
+    def test_long_book_pays_financing(self):
+        from tqe.backtest.engine import run_backtest
+
+        idx, tenors, rets, dv01 = self._panels()
+        pos = pd.DataFrame(1_000_000.0, index=idx, columns=tenors)
+        sig = pd.DataFrame(1.0, index=idx, columns=tenors)
+        funding = pd.Series(0.05, index=idx)
+        cfg = Config()
+        r = run_backtest(sig, rets, dv01, cfg, positions=pos,
+                         funding_rate=funding, run_canary=False)
+        assert r.financing.sum() > 0, "a net long book must pay funding"
+        # 2mm notional at 5% for ~2 years
+        assert r.metrics["total_financing"] == pytest.approx(
+            2_000_000 * 0.05 * (idx[-1] - idx[0]).days / 360.0, rel=0.05
+        )
+
+    def test_short_book_receives_financing(self):
+        from tqe.backtest.engine import run_backtest
+
+        idx, tenors, rets, dv01 = self._panels()
+        pos = pd.DataFrame(-1_000_000.0, index=idx, columns=tenors)
+        sig = pd.DataFrame(-1.0, index=idx, columns=tenors)
+        r = run_backtest(sig, rets, dv01, Config(), positions=pos,
+                         funding_rate=pd.Series(0.05, index=idx), run_canary=False)
+        assert r.financing.sum() < 0, "a net short book receives funding"
+
+    def test_cash_neutral_book_pays_nothing(self):
+        """The invariant that makes relative-value P&L interpretable."""
+        from tqe.backtest.engine import run_backtest
+
+        idx, tenors, rets, dv01 = self._panels()
+        pos = pd.DataFrame({"2 Yr": 1_000_000.0, "10 Yr": -1_000_000.0}, index=idx)
+        sig = pd.DataFrame({"2 Yr": 1.0, "10 Yr": -1.0}, index=idx)
+        r = run_backtest(sig, rets, dv01, Config(), positions=pos,
+                         funding_rate=pd.Series(0.05, index=idx), run_canary=False)
+        assert abs(r.financing.sum()) < 1e-6
+
+    def test_financing_reduces_a_long_book_return(self):
+        from tqe.backtest.engine import run_backtest
+
+        idx, tenors, rets, dv01 = self._panels()
+        pos = pd.DataFrame(1_000_000.0, index=idx, columns=tenors)
+        sig = pd.DataFrame(1.0, index=idx, columns=tenors)
+        funding = pd.Series(0.05, index=idx)
+        cfg_on, cfg_off = Config(), Config()
+        cfg_off.backtest.include_financing = False
+        on = run_backtest(sig, rets, dv01, cfg_on, positions=pos,
+                          funding_rate=funding, run_canary=False)
+        off = run_backtest(sig, rets, dv01, cfg_off, positions=pos,
+                           funding_rate=funding, run_canary=False)
+        assert on.metrics["ann_return"] < off.metrics["ann_return"]
+
+    def test_riskless_carry_is_not_alpha(self):
+        """The headline regression.
+
+        A book that is only ever long a near-riskless instrument yielding the
+        funding rate must earn approximately zero once funded. Before the fix
+        this scored a Sharpe above 12.
+        """
+        from tqe.backtest.engine import run_backtest
+
+        n = 500
+        idx = pd.bdate_range("2020-01-01", periods=n)
+        rate = 0.05
+        # A bill returning the funding rate daily with negligible volatility.
+        daily = rate / 252.0
+        rng = np.random.default_rng(3)
+        rets = pd.DataFrame({"3 Mo": daily + rng.normal(0, 1e-6, n)}, index=idx)
+        dv01 = pd.DataFrame({"3 Mo": 0.0025}, index=idx)
+        pos = pd.DataFrame({"3 Mo": 10_000_000.0}, index=idx)
+        sig = pd.DataFrame({"3 Mo": 1.0}, index=idx)
+
+        unfunded = Config()
+        unfunded.backtest.include_financing = False
+        u = run_backtest(sig, rets, dv01, unfunded, positions=pos,
+                         funding_rate=pd.Series(rate, index=idx), run_canary=False)
+        f = run_backtest(sig, rets, dv01, Config(), positions=pos,
+                         funding_rate=pd.Series(rate, index=idx), run_canary=False)
+
+        assert u.metrics["sharpe"] > 5, "the unfunded bug should look spectacular"
+        assert abs(f.metrics["ann_return"]) < 0.01, (
+            f"funded carry should be ~0, got {f.metrics['ann_return']:.4%}"
+        )

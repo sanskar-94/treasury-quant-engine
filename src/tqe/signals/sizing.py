@@ -30,6 +30,7 @@ log = get_logger("signals.sizing")
 
 __all__ = [
     "apply_no_trade_band",
+    "apply_rebalance_schedule",
     "realised_volatility",
     "volatility_target_weights",
     "kelly_size",
@@ -247,6 +248,9 @@ def size_portfolio(
         target_dv01, dv01_panel.shift(1),
         capital=cfg.capital, max_leverage=cfg.max_leverage,
     )
+    # Order matters: the schedule decides *when* trading is permitted, then the
+    # band decides whether the move is large enough to bother with.
+    notional = apply_rebalance_schedule(notional, getattr(cfg, "rebalance", "daily"))
     if getattr(cfg, "no_trade_band", 0.0) > 0:
         notional = apply_no_trade_band(notional, cfg.no_trade_band)
     # Recompute the realised DV01 after banding and the leverage cap, so the
@@ -310,3 +314,62 @@ def apply_no_trade_band(
         current = np.where(trade, tgt[i], current)
         held[i] = current
     return pd.DataFrame(held, index=targets.index, columns=targets.columns)
+
+
+def apply_rebalance_schedule(
+    targets: pd.DataFrame,
+    frequency: str = "daily",
+) -> pd.DataFrame:
+    """Hold positions constant between scheduled rebalance dates.
+
+    A blunter turnover control than :func:`apply_no_trade_band` and complementary
+    to it: the band asks "has the target moved enough to be worth trading?",
+    while the schedule asks "are we even allowed to trade today?". Together they
+    cut turnover far more than either does alone, because the band still fires on
+    every one of 252 opportunities per year if you let it.
+
+    The schedule is derived from the index itself rather than from a calendar
+    rule, so it lands on real trading days and never invents a rebalance on a
+    market holiday.
+
+    Parameters
+    ----------
+    targets:
+        Desired positions per date.
+    frequency:
+        ``"daily"`` (no constraint), ``"weekly"`` (first trading day of each
+        ISO week), ``"biweekly"``, or ``"monthly"`` (first trading day of each
+        month).
+
+    Returns
+    -------
+    pd.DataFrame
+        Positions held, changing only on rebalance dates.
+    """
+    freq = (frequency or "daily").lower()
+    if freq == "daily" or targets.empty:
+        return targets
+
+    idx = pd.DatetimeIndex(targets.index)
+    if freq == "weekly":
+        # First trading day of each ISO week present in the index.
+        key = pd.Series(idx.isocalendar().week.to_numpy() + idx.year.to_numpy() * 100, index=idx)
+    elif freq == "biweekly":
+        weeks = idx.isocalendar().week.to_numpy() + idx.year.to_numpy() * 100
+        key = pd.Series(weeks // 2, index=idx)
+    elif freq == "monthly":
+        key = pd.Series(idx.year.to_numpy() * 100 + idx.month.to_numpy(), index=idx)
+    else:
+        raise ValueError(
+            f"Unknown rebalance frequency {frequency!r}; "
+            "use daily | weekly | biweekly | monthly"
+        )
+
+    is_rebalance = key != key.shift()
+    is_rebalance.iloc[0] = True
+    # Take the target on rebalance days, carry it forward on every other day.
+    # The mask is broadcast explicitly: pandas does not align an (n, 1) array
+    # against an (n, m) frame in `where`, it raises.
+    mask = np.broadcast_to(is_rebalance.to_numpy()[:, None], targets.shape)
+    held = targets.where(mask)
+    return held.ffill().fillna(0.0)

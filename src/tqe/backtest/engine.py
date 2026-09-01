@@ -59,6 +59,7 @@ class BacktestResult:
     positions: pd.DataFrame
     trades: pd.DataFrame
     costs: pd.Series
+    financing: pd.Series = field(default_factory=lambda: pd.Series(dtype=float))
     metrics: dict[str, Any] = field(default_factory=dict)
     exposures: pd.DataFrame = field(default_factory=pd.DataFrame)
     benchmark: pd.Series | None = None
@@ -81,6 +82,8 @@ class BacktestResult:
             f"Ann. turnover   {m.get('ann_turnover', 0):>10.2f}x",
             f"Total costs     {m.get('total_costs', 0):>10,.0f}  "
             f"({m.get('cost_drag_annual', 0):.2%} p.a.)",
+            f"Financing       {m.get('total_financing', 0):>10,.0f}  "
+            f"({m.get('financing_drag_annual', 0):.2%} p.a.)",
         ]
         if "sharpe_gross" in m:
             lines.append(f"Sharpe (gross)  {m['sharpe_gross']:>10.2f}")
@@ -104,12 +107,40 @@ class BacktestResult:
         if not self.trades.empty:
             self.trades.to_parquet(out / "trades.parquet")
         self.costs.to_frame("costs").to_parquet(out / "costs.parquet")
+        if len(self.financing):
+            self.financing.to_frame("financing").to_parquet(out / "financing.parquet")
         if not self.exposures.empty:
             self.exposures.to_parquet(out / "exposures.parquet")
         (out / "metrics.json").write_text(json.dumps(self.metrics, indent=2, default=str))
         (out / "summary.txt").write_text(self.summary())
         log.info("backtest artefacts written to %s", out)
         return out
+
+
+def _funding_from_curve(cfg: Config, index: pd.Index) -> pd.Series | None:
+    """Annualised funding rate per date: the shortest bill yield plus repo spread.
+
+    Read from the cached curve rather than passed in, so a caller who does not
+    think about financing still gets it charged. Returns ``None`` when no curve
+    is available, in which case the engine simply cannot fund the book and says
+    so via ``total_financing == 0``.
+    """
+    path = cfg.processed_dir / "curve.parquet"
+    if not path.exists():
+        return None
+    try:
+        from ..data.sources import TENOR_YEARS
+
+        curve = pd.read_parquet(path)
+        avail = [c for c in curve.columns if c in TENOR_YEARS]
+        if not avail:
+            return None
+        short = min(avail, key=lambda c: TENOR_YEARS[c])
+        rate = curve[short].reindex(index.union(curve.index)).ffill().reindex(index)
+        return rate + cfg.costs.repo_spread_bp * 1e-4
+    except Exception as exc:  # noqa: BLE001 - financing must not break a run
+        log.warning("could not derive a funding rate (%s); financing not charged", exc)
+        return None
 
 
 def _bucket_map(tenors) -> dict[str, str]:
@@ -127,13 +158,27 @@ def _core_loop(
     capital: float,
     include_costs: bool,
     slippage_multiplier: float,
-) -> tuple[pd.Series, pd.Series, pd.Series, pd.DataFrame]:
+    funding_rate: pd.Series | None = None,
+    include_financing: bool = True,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.DataFrame, pd.Series]:
     """Run the P&L loop.
 
     ``positions`` holds signed **notional face** per tenor for each day, already
     aligned so that row ``t`` is the book carried through day ``t``.
 
-    Returns ``(net_returns, gross_returns, costs, trades)``.
+    **Financing is not optional bookkeeping - it is what makes the P&L an
+    excess return.** A bond position bought with borrowed money earns its total
+    return and pays repo on the borrowed amount; the strategy only keeps the
+    difference. Omitting the funding leg hands a leveraged book the risk-free
+    rate for nothing, and the distortion is not small: over 2018-2026 a
+    three-month bill returned 2.81% at almost zero volatility, so an unfunded
+    backtest scores holding cash at a Sharpe above 12. Any strategy with a net
+    long bias then inherits a large, entirely fictitious edge.
+
+    The charge is ``net_notional * funding_rate * days/360`` (ACT/360, the repo
+    convention). It is levied on the **net** book: longs pay, shorts receive.
+
+    Returns ``(net_returns, gross_returns, costs, trades, financing)``.
     """
     tenors = list(positions.columns)
     rets = returns_panel.reindex(index=positions.index, columns=tenors).fillna(0.0)
@@ -161,14 +206,27 @@ def _core_loop(
             )
             cost_arr[nz] += costs_j * slippage_multiplier
 
-    net_pnl = gross_pnl - cost_arr
-
+    # ---- financing on the net borrowed notional ---- #
     idx = positions.index
+    fin_arr = np.zeros(len(pos))
+    if include_financing and funding_rate is not None:
+        rate = funding_rate.reindex(idx).ffill().fillna(0.0).to_numpy(dtype=float)
+        # Actual calendar days between marks, so weekends are funded too.
+        days = np.empty(len(idx))
+        days[0] = 1.0
+        days[1:] = np.diff(idx.to_numpy().astype("datetime64[D]").astype(float))
+        days = np.clip(days, 0.0, 10.0)
+        net_notional = pos.sum(axis=1)
+        fin_arr = net_notional * rate * days / 360.0
+
+    net_pnl = gross_pnl - cost_arr - fin_arr
+
     return (
         pd.Series(net_pnl / capital, index=idx, name="returns"),
         pd.Series(gross_pnl / capital, index=idx, name="gross_returns"),
         pd.Series(cost_arr, index=idx, name="costs"),
         pd.DataFrame(trade, index=idx, columns=tenors),
+        pd.Series(fin_arr, index=idx, name="financing"),
     )
 
 
@@ -181,6 +239,7 @@ def run_backtest(
     benchmark: pd.Series | None = None,
     yield_change_panel: pd.DataFrame | None = None,
     positions: pd.DataFrame | None = None,
+    funding_rate: pd.Series | None = None,
     run_canary: bool = True,
     n_trials: int = 1,
 ) -> BacktestResult:
@@ -206,6 +265,12 @@ def run_backtest(
         sizing. Falls back to return volatility if absent.
     positions:
         Supply a pre-computed notional book to bypass the sizing layer entirely.
+    funding_rate:
+        Annualised repo/funding rate per date. Longs pay it, shorts receive it.
+        Defaults to the shortest available tenor's yield plus
+        ``cfg.costs.repo_spread_bp`` - a bill yield is the closest thing to a
+        risk-free funding rate in this dataset. Without it the backtest reports
+        a total return where it should report an excess return.
     run_canary:
         Re-run with a deliberately look-ahead signal and report its Sharpe.
     n_trials:
@@ -256,9 +321,15 @@ def run_backtest(
     positions = positions.fillna(0.0)
     buckets = _bucket_map(tenors)
 
-    net_r, gross_r, costs, trades = _core_loop(
+    # Funding rate: the shortest tenor available is the best risk-free proxy in
+    # this dataset, plus the configured repo spread over general collateral.
+    if funding_rate is None and bc.include_financing:
+        funding_rate = _funding_from_curve(cfg, returns_panel.index)
+
+    net_r, gross_r, costs, trades, financing = _core_loop(
         positions, returns_panel, cost_model, buckets,
         bc.initial_capital, bc.include_costs, bc.slippage_multiplier,
+        funding_rate=funding_rate, include_financing=bc.include_financing,
     )
 
     equity = bc.initial_capital * (1.0 + net_r).cumprod()
@@ -273,6 +344,10 @@ def run_backtest(
     daily_turnover = trades.abs().sum(axis=1) / max(bc.initial_capital, EPS)
     metrics["ann_turnover"] = float(daily_turnover.mean() * 252.0)
     metrics["total_costs"] = float(costs.sum())
+    metrics["total_financing"] = float(financing.sum())
+    metrics["financing_drag_annual"] = float(
+        financing.sum() / bc.initial_capital / max(len(net_r) / 252.0, EPS)
+    )
     years = max(len(net_r) / 252.0, EPS)
     metrics["cost_drag_annual"] = float(costs.sum() / bc.initial_capital / years)
     metrics["avg_gross_dv01"] = float(target_dv01.abs().sum(axis=1).mean())
@@ -308,9 +383,16 @@ def run_backtest(
         # Perfect foresight: trade the sign of the return that is about to be
         # realised, scaled like a real signal. This is the ceiling a total
         # leak would reach, so the honest run must sit far below it.
+        #
+        # The signal is demeaned cross-sectionally so the canary carries no net
+        # cash position. Without that it pays (or receives) funding like any
+        # other book, and on a net-long-biased forecast the funding drag can
+        # drive the "perfect" run BELOW the honest one - which makes the ratio
+        # meaningless. Neutralising the funding leg leaves a clean measure of
+        # how much of the achievable forecasting edge is being captured.
         realised = returns_panel[tenors].reindex(sig.index)
         cheat = np.sign(realised) * sig.abs().replace(0.0, 1.0)
-        cheat = cheat.fillna(0.0)
+        cheat = cheat.sub(cheat.mean(axis=1), axis=0).fillna(0.0)
         try:
             from ..signals.sizing import size_portfolio as _size
 
@@ -320,9 +402,13 @@ def run_backtest(
                 dv01_panel[tenors].reindex(cheat.index),
                 pc,
             )["notional"].fillna(0.0)
-            c_net, _, _, _ = _core_loop(
+            # Force the canary's net notional to zero so its P&L is pure
+            # forecasting, uncontaminated by a funding position.
+            cheat_pos = cheat_pos.sub(cheat_pos.mean(axis=1), axis=0)
+            c_net, _, _, _, _ = _core_loop(
                 cheat_pos, returns_panel, cost_model, buckets,
                 bc.initial_capital, bc.include_costs, bc.slippage_multiplier,
+                funding_rate=funding_rate, include_financing=bc.include_financing,
             )
             canary = performance_metrics(c_net).get("sharpe", np.nan)
             metrics["lookahead_canary_sharpe"] = float(canary)
@@ -354,6 +440,7 @@ def run_backtest(
         positions=positions,
         trades=trades,
         costs=costs,
+        financing=financing,
         metrics=metrics,
         exposures=exposures,
         benchmark=benchmark.reindex(net_r.index) if benchmark is not None else None,

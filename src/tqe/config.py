@@ -203,11 +203,13 @@ class PortfolioConfig:
     # Fraction of the average gross book a target must move before it is traded.
     # The single most effective turnover control in the system - see
     # signals/sizing.apply_no_trade_band for the measured impact.
-    no_trade_band: float = 0.50
+    no_trade_band: float = 2.00
     # Exponential half-life applied to the signal, in days. Damps day-to-day
     # forecast noise before it becomes turnover.
-    signal_halflife: float = 0.0
-    rebalance: str = "daily"  # daily | weekly
+    signal_halflife: float = 10.0
+    # daily | weekly | biweekly | monthly.  Combined with `no_trade_band` this is
+    # the main turnover lever; see signals/sizing.apply_rebalance_schedule.
+    rebalance: str = "monthly"
     vol_lookback: int = 63
     kelly_fraction: float = 0.25
 

@@ -79,8 +79,9 @@ portfolio:
   turnover_penalty: 2.0     # multiple of the modelled transaction cost
   signal_clip: 3.0
   min_signal_to_trade: 0.10
-  no_trade_band: 0.50       # rebalance only on material drift (turnover control)
-  signal_halflife: 0.0      # smoothing costs more edge than it saves in costs here
+  no_trade_band: 2.00       # rebalance only on material drift (turnover control)
+  signal_halflife: 10.0     # dominant turnover lever: 8/8 top configs use it
+  rebalance: monthly        # daily | weekly | biweekly | monthly
   vol_lookback: 63
   kelly_fraction: 0.25
 
