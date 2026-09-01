@@ -17,6 +17,8 @@ own docstring.
 | turnover penalty as a raw coefficient | multiplier on cost, amortised over the holding period | a raw coefficient is four orders of magnitude off daily returns and returns an empty book |
 | canary = signal shifted forward | canary = realised future return | shifting the signal only misaligns it and proves nothing |
 | DV01 caps only | DV01 caps **and** a gross-notional leverage cap | a DV01 limit permitted 14.9x leverage via the front end |
+| `include_financing` declared but unused | financing charged on net notional, ACT/360 | without it a riskless bill scores Sharpe 12 and every net-long book inherits a fictitious edge |
+| `rebalance: daily\|weekly` declared but unused | implemented as daily/weekly/biweekly/monthly | a config key that silently does nothing is worse than no key |
 
 ## 0. Conventions that hold everywhere
 
@@ -575,9 +577,9 @@ from its own output:
 | `features/` | complete | 35 |
 | `models/`, `training/` | complete | 62 |
 | `signals/`, `portfolio/` | complete | covered via backtest + smoke |
-| `backtest/` | complete | in `test_training.py` |
+| `backtest/` | complete (costs **and** financing) | in `test_training.py` |
 | `execution/` | complete (paper + Alpaca) | 25 |
 | `live/`, `api/`, `cli.py` | complete | smoke test + manual |
 
-260 tests, plus a 45-check end-to-end smoke test on synthetic data
+265 tests, plus a 45-check end-to-end smoke test on synthetic data
 (`scripts/smoke_test.py`) that needs no network and runs in about a minute.
