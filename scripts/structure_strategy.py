@@ -44,7 +44,6 @@ from tqe.data.universe import constant_maturity_total_return, universe_panel  # 
 from tqe.logging_utils import get_logger, setup_logging  # noqa: E402
 from tqe.models.registry import create_model  # noqa: E402
 from tqe.portfolio.structures import build_standard_structures  # noqa: E402
-from tqe.training.metrics import performance_metrics  # noqa: E402
 from tqe.training.splits import walk_forward_splits  # noqa: E402
 from tqe.training.train import _apply, fit_scaler  # noqa: E402
 
@@ -80,9 +79,15 @@ def structure_panel(rets: dict, tenors: list[str], target_dv01: float = 1000.0):
                 weights[s.name].iloc[t] = s.weights.reindex(tenors).fillna(0.0).to_numpy()
 
     for name in names:
-        # Return per unit of structure: weights are notional, so divide by the
-        # DV01 risk taken to keep the series comparable across structures.
-        returns[name] = (weights[name] * tr.fillna(0.0)).sum(axis=1) / target_dv01
+        # A structure's P&L is (notional x return) summed over legs, which is
+        # dollars. To make it a *return* it has to be divided by the capital the
+        # position consumes, not by an arbitrary constant: dividing by
+        # target_dv01 produces numbers of order 1 that are not returns at all
+        # and compound to infinity. Gross notional is the honest denominator -
+        # it is what the balance sheet and the funding leg actually see.
+        gross = weights[name].abs().sum(axis=1).replace(0.0, np.nan)
+        pnl = (weights[name] * tr.fillna(0.0)).sum(axis=1)
+        returns[name] = (pnl / gross).fillna(0.0)
 
     return pd.DataFrame(returns), weights
 
@@ -161,51 +166,60 @@ def block_sign_flip(signal: pd.DataFrame, block: int = 63, seed: int = 0) -> pd.
 
 def evaluate(signal: pd.DataFrame, struct_rets: pd.DataFrame, weights: dict,
              cfg, target_vol: float = 0.03) -> dict:
-    """P&L of holding ``signal`` units of each structure, net of cost.
+    """P&L of holding ``signal`` units of each structure.
 
-    Structures are DV01-neutral, so a book of them carries no directional rates
-    exposure by construction and no projection is needed. They are not cash
-    neutral - a steepener is long more notional than it is short - so financing
-    is charged on the residual net notional, exactly as elsewhere.
+    **This delegates to** :func:`tqe.backtest.engine.run_backtest` **rather than
+    computing P&L here, and that is the whole point.** The first version of this
+    function hand-rolled the accounting: it charged transaction costs and
+    silently omitted financing, which is exactly the bug the engine had been
+    fixed for weeks earlier. It duly produced a Sharpe of 3.96, and a static
+    3-month/2-year steepener scoring 8.1 - because a DV01-weighted steepener is
+    hugely net *long* notional (the short leg needs enormous size to match the
+    long leg's DV01), so it is a levered cash position wearing a curve trade's
+    clothes.
+
+    Structures are DV01-neutral, which removes the *directional rates* exposure.
+    It does not remove the *funding* exposure, and conflating the two is how the
+    same error keeps reappearing. Building the tenor-space book and handing it to
+    the engine means costs, financing and the P&L convention all come from one
+    place that is tested.
     """
+    from tqe.backtest.engine import run_backtest
+
     idx = signal.index
     common = [c for c in signal.columns if c in struct_rets.columns]
     sig = signal[common].reindex(idx).fillna(0.0)
     sr = struct_rets[common].reindex(idx).fillna(0.0)
 
+    # Scale the whole book to a common risk budget so cells are comparable.
     gross = (sig * sr).sum(axis=1)
     sd = gross.std() * np.sqrt(252)
     scale = (target_vol / sd) if sd > 0 else 0.0
-    pnl = gross * scale
 
-    # Transaction cost: turnover of each structure's underlying notional.
-    cm = CostModel(cfg.costs)
+    # Collapse the structure book into tenor-space notionals.
     tenors = list(next(iter(weights.values())).columns)
     notional = pd.DataFrame(0.0, index=idx, columns=tenors)
     for name in common:
-        notional = notional.add(weights[name].reindex(idx).fillna(0.0).mul(sig[name] * scale, axis=0),
-                                fill_value=0.0)
-    traded = notional.diff().abs().fillna(0.0)
-    from tqe.data.universe import bucket_for_years
+        w = weights[name].reindex(idx).fillna(0.0)
+        notional = notional.add(w.mul(sig[name] * scale, axis=0), fill_value=0.0)
 
-    cost = pd.Series(0.0, index=idx)
-    for c in tenors:
-        bucket = bucket_for_years(TENOR_YEARS.get(c, 10.0))
-        v = traded[c].to_numpy()
-        nz = v > 0
-        if nz.any():
-            arr = np.zeros(len(v))
-            arr[nz] = [cm.total_cost(float(x), bucket) for x in v[nz]]
-            cost += pd.Series(arr, index=idx)
+    from tqe.data.universe import constant_maturity_total_return, universe_panel
 
-    net_notional = notional.sum(axis=1)
-    capital = cfg.backtest.initial_capital
-    ret_net = pnl - (cost / capital)
+    rets = constant_maturity_total_return(
+        pd.read_parquet(Path(__file__).resolve().parents[1] / "data/processed/curve.parquet"),
+        tenors,
+    )
+    tr = universe_panel(rets, "total_return")
+    dv = universe_panel(rets, "dv01")
+    yc = universe_panel(rets, "yield_change")
 
-    m = performance_metrics(ret_net)
-    m["ann_turnover"] = float(traded.sum(axis=1).mean() * 252 / capital)
-    m["cost_drag"] = float(cost.sum() / capital / max(len(idx) / 252, 1e-9))
-    m["mean_net_notional"] = float(net_notional.mean())
+    # A dummy tenor-space signal: positions are supplied directly, so the signal
+    # only has to carry the index and columns.
+    dummy = pd.DataFrame(0.0, index=idx, columns=tenors)
+    r = run_backtest(dummy, tr, dv, cfg, CostModel(cfg.costs),
+                     yield_change_panel=yc, positions=notional, run_canary=False)
+    m = dict(r.metrics)
+    m["mean_net_notional"] = float(r.exposures["net_notional"].mean())
     return m
 
 
@@ -235,17 +249,24 @@ def main() -> int:
     print(f"  structures: {', '.join(sr.columns)}")
     print(f"  panel {sr.shape},  {sr.index.min().date()} .. {sr.index.max().date()}\n")
 
+    # Arithmetic annualisation: these are relative-value spreads that can be
+    # negative for long stretches, so geometric compounding is not meaningful
+    # and overflows on any structure that spends time underwater.
     ann = pd.DataFrame({
-        "ann_return": (1 + sr).prod() ** (252 / sr.notna().sum()) - 1,
+        "ann_return": sr.mean() * 252,
         "ann_vol": sr.std() * np.sqrt(252),
     })
-    ann["sharpe"] = ann.ann_return / ann.ann_vol
+    ann["sharpe"] = ann.ann_return / ann.ann_vol.replace(0.0, np.nan)
     print("  buy-and-hold each structure (no model):")
     print(ann.round(4).to_string())
 
-    # Forward structure return as the target.
+    # Target alignment follows the same contract as the main pipeline: X[t]
+    # already holds t-1 information, so y[t] is the return realised over day t
+    # and no further lead is applied. Leading it here as well was how the
+    # one-day misalignment in tqe.features.builder was originally found.
     h = args.horizon
-    y = ((1 + sr).rolling(h).apply(np.prod, raw=True) - 1.0).shift(-h) if h > 1 else sr.shift(-1)
+    lead = h - 1
+    y = sr if h == 1 else ((1 + sr).rolling(h).apply(np.prod, raw=True) - 1.0).shift(-lead)
 
     print("\n  training ridge on structure returns ...")
     preds = walk_forward_structure_model(X, y, cfg)
@@ -265,7 +286,8 @@ def main() -> int:
         rows.append({
             "signal": label, "sharpe": m["sharpe"], "ann_return": m["ann_return"],
             "ann_vol": m["ann_vol"], "max_dd": m["max_drawdown"],
-            "turnover": m["ann_turnover"], "cost_drag": m["cost_drag"],
+            "turnover": m["ann_turnover"], "cost_drag": m["cost_drag_annual"],
+            "financing": m.get("financing_drag_annual", 0.0),
             "placebo_mean": float(np.mean(pl)), "placebo_sd": float(np.std(pl)),
             "p_value": (beat + 1) / (len(pl) + 1),
             "z_vs_placebo": float((m["sharpe"] - np.mean(pl)) / max(np.std(pl), 1e-9)),

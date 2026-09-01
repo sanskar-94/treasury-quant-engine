@@ -551,16 +551,55 @@ Re-run evidence is committed as `*_v2.csv` / `*_v3.csv` in
 [`results/`](results/), alongside the originals, so the before-and-after is
 checkable rather than asserted.
 
+### Trading the structures natively — and DV01-neutral is not funding-neutral
+
+The attribution said the skill is in slope and curvature while 42% of the risk
+sits in level. The indicated fix is to trade **DV01-weighted structures**
+directly — steepeners and butterflies that cannot express a level view at all —
+rather than trading nine tenors and projecting the exposure away afterwards
+([`scripts/structure_strategy.py`](scripts/structure_strategy.py)).
+
+Ridge forecasts of structure returns reach an out-of-sample **IC of +0.101**,
+an order of magnitude above the tenor-space model. The first run scored
+**Sharpe 3.96**.
+
+It was wrong, and the way it was wrong is the most useful thing in this section.
+That script computed its own P&L: it charged transaction costs and omitted
+financing — precisely the bug the engine had been fixed for weeks earlier,
+reintroduced by a helper that bypassed the engine. Charging funding properly:
+
+| | Hand-rolled P&L | Delegated to the engine |
+| --- | ---: | ---: |
+| Sharpe | **3.96** | **+0.04** |
+| Financing drag | not charged | **28.4% p.a.** |
+
+Twenty-eight percent. **A DV01-neutral structure is not a cash-neutral one, and
+the two are easy to conflate.** A steepener matches the DV01 of its legs, so the
+short leg has to be enormous relative to the long one — a 2s10s steepener is
+about +$5.3mm against −$1.3mm — leaving it hugely net long notional. It is a
+levered cash position wearing a curve trade's clothes. The static 3-month/2-year
+steepener scoring a buy-and-hold Sharpe of 8.1 in the table above is the same
+effect in its purest form, and should be read as a warning label rather than an
+opportunity.
+
+With funding charged, the structure model reaches Sharpe +0.04 at p = 0.27.
+Expressing the view natively does not rescue it either.
+
+`evaluate()` now delegates to `run_backtest` instead of reimplementing the
+accounting. That is the actual lesson: **there should be exactly one place in a
+system that turns positions into P&L**, and every experiment should go through
+it. Five separate times in this project a number was inflated by a funding
+position that a bespoke P&L path had not charged for.
+
 ---
 
 ## What I'd do next
 
-1. **Neutralise first, measure second.** The attribution says the edge is in
-   slope and curvature while the risk is in level. Building the book on the
-   structures in [`portfolio/structures.py`](src/tqe/portfolio/structures.py) —
-   DV01-neutral steepeners and butterflies — expresses only the part the model
-   is good at, instead of expressing it and then projecting the level exposure
-   away afterwards.
+1. **Cash-neutral structures.** Trading structures natively was tried and the
+   funding leg ate it (28.4% p.a.). The next version has to constrain net
+   *notional* as well as net DV01 — a steepener financed by an offsetting bill
+   position rather than by borrowing, which is how a desk would actually put it
+   on.
 2. **Push the mean-reversion work further.** Rich/cheap and reversal features
    removed about a third of the IC degradation but did not flip its sign. The
    residuals are currently taken against a curve fitted to that day alone;

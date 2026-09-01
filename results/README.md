@@ -20,6 +20,7 @@ is checked in so the results can be read without running anything.
 | `carry_benchmark_v2.csv` | carry benchmark, re-run after the alignment fix |
 | `turnover_study_v2.csv` | 54 turnover configs, re-run after the alignment fix |
 | `carry_benchmark.csv` | carry vs model vs blend, each against 40 block-sign-flip controls |
+| `structure_strategy.csv` | DV01-neutral steepeners and butterflies, funded, vs 40 controls |
 | `charts/curve_surface.png` | the full curve 1990-2026 with inversions shaded |
 | `charts/curve_fit.png` | NSS fit vs market for the latest date, with rich/cheap residuals |
 | `charts/factors.png` | PCA loadings and cumulative level/slope/curvature paths |
