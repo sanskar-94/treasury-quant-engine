@@ -18,27 +18,65 @@ python3 -m venv .venv && ./.venv/bin/pip install -e ".[all]"
 
 ---
 
-## The headline is a negative result
+## The headline
 
-**The model has a real statistical edge that does not survive contact with a
-properly funded portfolio.** That is the finding, and it is stated first because
-the interesting engineering here is what it took to establish it.
+**The model has genuine skill at the front of the curve and none at the long
+end, and what it has does not survive being made market-neutral.** That is the
+finding. The engineering worth reading is what it took to get to a number that
+means anything - four bugs, three of them capable of manufacturing a result, and
+one that was quietly destroying three quarters of the signal.
 
-Out-of-sample, 2018-08 to 2026-08 (2,016 trading days, 8 walk-forward folds):
+Walk-forward out-of-sample, 2018-08 to 2026-08 (2,016 trading days, 8 folds):
 
-| Measure | Value | Reading |
-| --- | ---: | --- |
-| Model IC (pooled, OOS) | **+0.029** | real, and positive on all 9 tenors |
-| Sharpe, before financing | 2.43 | **meaningless — see below** |
-| Sharpe, financing charged | **0.12** | |
-| Deflated Sharpe (136 configs searched) | **0.011** | ~1% chance the Sharpe is real |
-| Sharpe, market-neutral (zero net cash **and** zero net DV01) | **+0.05** | p ≈ 0.14 against 20 placebos |
-| Perfect-foresight ceiling | 14.65 | the honest run captures 0.9% of it |
+| Information coefficient | 3 Mo | 6 Mo | 1 Yr | 2 Yr | 5 Yr | 10 Yr | 30 Yr |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| OOS IC | **+0.124** | **+0.154** | **+0.092** | +0.004 | +0.010 | −0.003 | −0.002 |
 
-The gap between 2.43 and 0.12 is the whole story: **the backtest was reporting a
-total return where it should have reported an excess return.**
+The front end is genuinely forecastable - the Fed telegraphs its path, and bills
+and 1-year notes price it mechanically. Past two years there is nothing. That
+gradient is the most economically sensible thing this project produced.
 
-### How a Sharpe of 2.4 became 0.1
+Turning it into a portfolio:
+
+| Construction | Sharpe | p vs own controls | Reading |
+| --- | ---: | ---: | --- |
+| Directional, funded | **+0.51** | 0.024 | still carries a funding position |
+| **Double-neutral, funded** | **+0.14** | **0.122** | the honest number |
+| Deflated Sharpe (145 configs) | **0.111** | — | ~11% chance it survives multiple testing |
+
+So: a real edge, in a specific place, too small to clear the bar once the
+funding channel is removed and the search width is accounted for. Not nothing,
+and not tradable.
+
+![Tearsheet](results/tearsheet.png)
+
+---
+
+## Four bugs, and why three of them flattered the result
+
+### 0. A one-day misalignment that destroyed most of the signal
+
+`build_features` lags `X` by one day so `X[t]` holds `t-1` information.
+`make_targets` *also* led `y` by one day. Both shifts were individually
+documented and individually sensible; together they aimed every forecast one
+session past the day the backtest trades it.
+
+| | corr with prediction |
+| --- | ---: |
+| `return[t+1]` — what the model forecast | **+0.0375** |
+| `return[t]` — what the backtest harvested | **+0.0095** |
+
+Three quarters of the signal, discarded by a single shift. Fixing it took the
+backtest Sharpe from 0.12 to 0.51.
+
+This one is worth dwelling on because it is the *opposite* of the usual failure.
+A leak announces itself with an implausible Sharpe and invites scrutiny. This
+error was conservative - it produced disappointing numbers that looked exactly
+like an honest negative result, and so nobody looks for it. It was found only
+because a separate experiment produced an absurd Sharpe of 9.6 and the audit
+that followed checked the alignment of everything.
+
+### 1. Financing was never charged
 
 `CostConfig` had a repo spread. `BacktestConfig` had `include_financing`. The
 P&L loop called neither. Positions earned their full total return with no charge
@@ -83,7 +121,8 @@ net duration, pure relative value — and run against a placebo battery:
 2 of 20 placebos beat the real signal (p ≈ 0.14), and the real result sits 0.9
 standard deviations above the placebo mean. **Indistinguishable from noise.**
 
-An IC of +0.029 is a real correlation. It is not a tradable edge.
+A front-end IC of +0.12 is a real correlation. It is not, on this evidence, a
+tradable edge.
 
 ![Tearsheet](results/tearsheet.png)
 
@@ -98,7 +137,7 @@ establishing that rigorously enough to believe the answer — and the four bugs
 below were each capable of manufacturing one, three of them found by *running*
 the system rather than reading it.
 
-### 1. Financing was never charged
+### Financing, in more detail
 
 Covered above. Cost: a Sharpe of 2.4 out of thin air. Now pinned by five
 regression tests, including one asserting that a book long a riskless instrument
@@ -158,7 +197,7 @@ reassuring and is easy to accept.
   are bit-identical.
 - **Per-fold scaling.** The scaler is refitted inside each fold on training data
   only.
-- **Deflated Sharpe.** All 136 searched configurations are counted, not the one
+- **Deflated Sharpe.** All 145 searched configurations are counted, not the one
   that won.
 
 ---
@@ -276,9 +315,9 @@ $10mm on-the-run 10y   spread 0.5/32 = 1.56bp of price
 ```bash
 tqe data pull                    # 36 years of curve + 16 FRED series (cached)
 tqe curve fit                    # NSS betas, bootstrapped zeros, causal PCA factors
-tqe features build               # 482 features × 6,946 rows
+tqe features build               # 489 features × 6,952 rows
 tqe train                        # walk-forward + deployable bundle
-tqe backtest --n-trials 136      # costs, financing, tearsheet, deflated Sharpe
+tqe backtest --n-trials 145      # costs, financing, tearsheet, deflated Sharpe
 tqe predict                      # next session's forecast per tenor
 tqe trade --dry-run              # full live path, no orders sent
 tqe serve --port 8000            # FastAPI
@@ -295,7 +334,7 @@ every seam on synthetic data in about a minute — 45 checks, no network.
 make test
 ```
 
-265 tests. Numerical code is checked against closed-form results and invariants,
+315 tests. Numerical code is checked against closed-form results and invariants,
 never against values copied from its own output. The suite leans on negative
 controls:
 
@@ -381,7 +420,9 @@ the degradation removed at 5 and 21 days. It is **not enough to flip the sign**,
 and 0 of 6 cells remain significant after correction.
 
 **And at the horizon this system actually ships with, it made things worse.**
-Retraining the full ensemble on all 613 features:
+Retraining the full ensemble on all 613 features (measured *before* the
+alignment fix above, so the absolute ICs are the old, misaligned ones; the
+comparison between the two feature sets is still like-for-like):
 
 | | 482 features | 613 features |
 | --- | ---: | ---: |
@@ -442,8 +483,9 @@ actually produce.
 
 It works, on its own terms. Rolling out-of-sample over 9,172 days in 1.4
 seconds, the predicted one-day yield change has an **IC of +0.0295, positive on
-all nine tenors** — matching the entire 482-feature ML pipeline with three
-factors and no feature engineering at all.
+all nine tenors**. That figure is measured directly against realised yield
+changes, so it is unaffected by the target-alignment bug — three factors and no
+feature engineering, matching what the 482-feature pipeline achieves.
 
 Run as a directional strategy it looked better still:
 
