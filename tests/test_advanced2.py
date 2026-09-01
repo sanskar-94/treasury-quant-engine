@@ -8,6 +8,8 @@ the cash-neutral construction silently broke DV01 neutrality.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -31,6 +33,17 @@ from tqe.portfolio.funding import (
     funding_cost,
 )
 from tqe.portfolio.structures import build_standard_structures, steepener
+
+#: Tests that read the cached Treasury history. The data is regenerable with
+#: `tqe data pull` but deliberately not committed, so CI skips these rather than
+#: failing on a missing file. They still run locally, where the point of them -
+#: checking the modules behave sensibly on REAL curve data, not just synthetic -
+#: actually holds.
+_CURVE = Path("data/processed/curve.parquet")
+needs_curve = pytest.mark.skipif(
+    not _CURVE.exists(),
+    reason="requires the cached Treasury curve; run `tqe data pull`",
+)
 
 TENORS = ["3 Mo", "6 Mo", "1 Yr", "2 Yr", "3 Yr", "5 Yr", "7 Yr", "10 Yr", "30 Yr"]
 DV01 = pd.Series(
@@ -186,6 +199,7 @@ class TestTermPremium:
         if len(sig):
             assert float(sig.abs().max().max()) < 25.0
 
+    @needs_curve
     def test_real_curve_premium_correlates_with_slope(self):
         """A steep curve is mostly term premium; near-zero correlation means broken."""
         curve = pd.read_parquet("data/processed/curve.parquet")
@@ -197,6 +211,7 @@ class TestTermPremium:
         slope = (curve["10 Yr"] - curve["3 Mo"]).reindex(tp.index)
         assert tp.corr(slope) > 0.4
 
+    @needs_curve
     def test_real_premium_is_in_a_plausible_range(self):
         """A 10y term premium of tens to a couple hundred bp, not percent."""
         curve = pd.read_parquet("data/processed/curve.parquet")
@@ -297,6 +312,7 @@ class TestHMM:
         assert len(a) > 500
         assert np.allclose(a.to_numpy(float), b.to_numpy(float), atol=1e-12, equal_nan=True)
 
+    @needs_curve
     def test_real_data_finds_distinct_regimes(self):
         """A degenerate fit gives two states with the same volatility."""
         curve = pd.read_parquet("data/processed/curve.parquet")
