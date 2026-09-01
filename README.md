@@ -527,6 +527,30 @@ curvature** and loses on **level** — it has curve-shape skill and no direction
 skill, while carrying its largest risk exposure precisely where it has no edge.
 That is a specific, actionable diagnosis, and it is invisible in a Sharpe ratio.
 
+### Re-validating everything after the alignment fix
+
+Every experiment in this project was originally run against the misaligned
+target, and the conclusions were published on that basis. Fixing the alignment
+invalidated the inputs to all of them, so they were re-run rather than assumed
+to still hold.
+
+| Experiment | Original conclusion | After the fix | Holds? |
+| --- | --- | --- | :-: |
+| Horizon × target (6 cells) | IC degrades and reverses with horizon; 0/6 after Holm | IC +0.012 / −0.062 / −0.154 at 1/5/21 days; 0/6 after Holm | ✅ |
+| Carry benchmark | Carry loses; model beats it; blend adds nothing | carry −0.20 (p=0.78), model **+0.14** (p=0.12), blend −0.21 | ✅ |
+| Turnover defaults (54 configs) | monthly / band 2.0 / halflife 10 / deadband 0.10 | same config ranks **3 of 54**; every lever conclusion unchanged | ✅ |
+| DNS vs ML | DNS's +0.41 is a funding artifact | DNS **−0.19** (p=0.63) vs ML +0.14 (p=0.12) | ✅ |
+
+All four survive. The defaults were deliberately **not** re-tuned to the new
+maximum — daily rebalancing now edges monthly out at +0.54 against +0.43, but
+at 35× turnover against 19×, and chasing that would be exactly the
+multiple-testing behaviour this project spends its time criticising. Ranking 3rd
+of 54 with far better cost robustness is the right place to stand.
+
+Re-run evidence is committed as `*_v2.csv` / `*_v3.csv` in
+[`results/`](results/), alongside the originals, so the before-and-after is
+checkable rather than asserted.
+
 ---
 
 ## What I'd do next
