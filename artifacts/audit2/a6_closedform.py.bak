@@ -1,0 +1,30 @@
+import sys; sys.path.insert(0,"src")
+import pandas as pd, numpy as np
+from tqe.config import load_config
+from tqe.backtest.costs import CostModel
+from tqe.backtest.engine import _core_loop
+
+cfg = load_config()
+cm = CostModel(cfg.costs)
+s = cfg.costs.repo_spread_bp/1e4
+r_gc = 0.04
+
+# A perfectly cash-neutral, DV01-unhedged book held for one year:
+# long $50mm of 2y, short $50mm of 30y.  Gross $100mm on $10mm capital.
+idx = pd.bdate_range("2020-01-01", periods=261)
+pos = pd.DataFrame({"2 Yr": 50e6, "30 Yr": -50e6}, index=idx)
+rets = pd.DataFrame(0.0, index=idx, columns=pos.columns)
+fr = pd.Series(r_gc + s, index=idx)          # GC + repo spread, as the engine builds it
+net, gross, cost, trades, fin = _core_loop(
+    pos, rets, cm, {"2 Yr":"2y","30 Yr":"30y"}, 1e7, True, 1.0,
+    funding_rate=fr, include_financing=True)
+print("ENGINE financing on a cash-neutral $100mm gross book, 1 year: $%,.2f".replace("%,","")% fin.sum())
+
+# The project's own cost model, applied leg by leg, same rate, same days
+days = np.empty(len(idx)); days[0]=1.0
+days[1:] = np.diff(idx.to_numpy().astype("datetime64[D]").astype(float))
+D = days.sum()
+correct = cm.financing(+50e6, D, r_gc) + cm.financing(-50e6, D, r_gc)
+print("CostModel.financing (costs.py, leg by leg):            $%.2f" % correct)
+print("closed form  gross * spread * days/360 = %.2f" % (100e6*s*D/360))
+print("calendar days:", D)

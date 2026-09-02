@@ -1,0 +1,51 @@
+import sys, json, math
+import numpy as np, pandas as pd
+sys.path.insert(0,"src")
+from tqe.config import Config, load_config
+from tqe.training.metrics import performance_metrics
+from pathlib import Path
+
+root=Path(".").resolve()
+cfg=load_config(root/"configs"/"default.yaml")
+print("processed_dir", cfg.processed_dir, "capital", cfg.backtest.initial_capital,
+      "benchmark", cfg.backtest.benchmark, "repo_spread_bp", cfg.costs.repo_spread_bp)
+
+from tqe.data.universe import universe_panel
+from tqe.data.universe import constant_maturity_total_return
+curve=pd.read_parquet(cfg.processed_dir/"curve.parquet")
+tenors=[t for t in cfg.data.core_tenors if t in curve.columns]
+rets=constant_maturity_total_return(curve, tenors)
+tr=universe_panel(rets,"total_return")
+
+R=pd.read_parquet("artifacts/backtests/latest/returns.parquet")["returns"]
+idx=R.index
+bench=tr[cfg.backtest.benchmark].reindex(idx).fillna(0.0)
+bm=performance_metrics(bench)
+M=json.load(open("artifacts/backtests/latest/metrics.json"))
+print("bench sharpe recomputed", bm["sharpe"], "stored", M["benchmark_sharpe"])
+print("bench ann_return", bm["ann_return"], "ann_vol", bm["ann_vol"], "maxdd", bm["max_drawdown"])
+
+# funding rate used by the engine
+from tqe.backtest.engine import _funding_from_curve
+fr=_funding_from_curve(cfg, tr.index).reindex(idx).ffill()
+days=np.empty(len(idx)); days[0]=1.0
+days[1:]=np.diff(idx.to_numpy().astype('datetime64[D]').astype(float)); days=np.clip(days,0,10)
+rf_daily=pd.Series(fr.to_numpy()*days/360.0, index=idx)
+print("mean annualised funding rate", (fr.mean()))
+bench_x = bench - rf_daily
+bx=performance_metrics(bench_x)
+print("BENCHMARK ON THE SAME (EXCESS) BASIS AS THE STRATEGY:")
+print("   ann_return", bx["ann_return"], " sharpe", bx["sharpe"], " maxdd", bx["max_drawdown"])
+active = R - bench
+print("reported IR", M["information_ratio"], " hand", active.mean()/active.std()*math.sqrt(252))
+active_x = R - bench_x
+print("IR on consistent basis", active_x.mean()/active_x.std()*math.sqrt(252))
+
+# autocorrelation / Lo-corrected Sharpe
+x=R.to_numpy(float)
+ac=[float(pd.Series(x).autocorr(k)) for k in range(1,11)]
+print("autocorr 1..10", np.round(ac,4))
+q=252
+s=1.0+2*sum((1-k/q)*ac[k-1] for k in range(1,min(11,q)))
+print("Lo scaling factor sqrt(q)/sqrt(q*... ) -> corrected ann sharpe =",
+      x.mean()/x.std(ddof=1)*q/math.sqrt(q*(1+2*sum((1-k/q)*ac[k-1] for k in range(1,11)))))

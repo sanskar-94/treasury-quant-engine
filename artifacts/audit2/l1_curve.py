@@ -1,0 +1,15 @@
+import pandas as pd, numpy as np, sys
+sys.path.insert(0,"src")
+c = pd.read_parquet("data/processed/curve.parquet")
+print("shape", c.shape)
+print("index", c.index.min(), c.index.max(), type(c.index))
+print(c.columns.tolist())
+print("dtypes", c.dtypes.unique())
+print("--- coverage ---")
+print(c.notna().mean().round(4))
+print("--- head/tail ---")
+print(c.head(3))
+print(c.tail(3))
+# weekday distribution
+print("--- weekday counts ---")
+print(pd.Series(c.index.dayofweek).value_counts().sort_index())

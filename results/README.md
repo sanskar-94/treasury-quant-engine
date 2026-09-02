@@ -22,6 +22,7 @@ is checked in so the results can be read without running anything.
 | `carry_benchmark.csv` | carry vs model vs blend, each against 40 block-sign-flip controls |
 | `structure_strategy.csv` | DV01-neutral steepeners and butterflies, funded, vs 40 controls |
 | `duration_timing.csv` | can the term premium time duration? static vs timed, funded |
+| `duration_harvest.csv` | where on the curve duration is best paid: 9 tenors x constant-DV01 and vol-targeted, plus two diversified arms, all funded and costed |
 | `integration_experiment.csv` | term premium and regime conditioning vs baseline, 40 controls each |
 | `structure_strategy_cashneutral.csv` | structures funded against a bill leg (net notional zero) |
 | `charts/curve_surface.png` | the full curve 1990-2026 with inversions shaded |
@@ -30,10 +31,17 @@ is checked in so the results can be read without running anything.
 | `charts/attribution.png` | cumulative P&L by curve factor, and share of gross risk |
 | `charts/signal_diagnostics.png` | signal persistence, distribution and turnover |
 
-**Read the two study files first** if you are checking whether the headline was
-cherry-picked. Together they are the 136 configurations that feed the deflated
-Sharpe ratio, and they contain every configuration tried rather than only the
-winner.
+**Read the study files first** if you are checking whether the headline was
+cherry-picked. Every row of every study file here is one configuration that was
+evaluated and compared: **219** in total (64 parameter, 72 + 54 turnover, 18
+horizon, 5 integration, 6 carry). They contain every configuration tried rather
+than only the winner, and `backtest/trials.py` counts them automatically so the
+deflated Sharpe cannot be computed against a smaller number by accident.
+
+That mattered: the tearsheet once reported a deflated Sharpe of 0.9043 while
+declaring "configurations searched: 1". Against the real 219 it is **0.100**, or
+**0.000** using the observed dispersion of the trial Sharpes (0.782) rather than
+the theoretical i.i.d. one (0.354).
 
 Note that the headline result is **negative**: after financing is charged the
 strategy has no economically significant edge. The top-level README explains how

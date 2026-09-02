@@ -1,0 +1,23 @@
+import pandas as pd, numpy as np, sys
+sys.path.insert(0,"src")
+from tqe.config import Config
+from tqe.backtest.costs import CostModel
+from tqe.backtest.engine import buy_and_hold, run_backtest
+from tqe.data.universe import constant_maturity_total_return, universe_panel
+from tqe.signals.alpha import predictions_to_signal, signal_decay
+
+cfg = Config.load("configs/default.yaml")
+print("portfolio cfg:", cfg.portfolio.__dict__)
+print("backtest cfg:", cfg.backtest.__dict__)
+preds = pd.read_parquet(cfg.processed_dir/"oos_predictions.parquet")
+print("preds", preds.shape, preds.index.min(), preds.index.max(), preds.columns.tolist()[:10])
+c = pd.read_parquet(cfg.processed_dir/"curve.parquet")
+rets = constant_maturity_total_return(c, cfg.data.core_tenors)
+tr = universe_panel(rets,"total_return"); dv = universe_panel(rets,"dv01"); yc = universe_panel(rets,"yield_change")
+sig = predictions_to_signal(preds, method="zscore", window=63, clip=cfg.portfolio.signal_clip, min_abs=cfg.portfolio.min_signal_to_trade)
+hl = cfg.portfolio.signal_halflife
+if hl and hl>0: sig = signal_decay(sig, halflife=hl)
+bench = buy_and_hold(tr, cfg.backtest.benchmark, sig.index)
+res = run_backtest(sig, tr, dv, cfg, CostModel(cfg.costs), benchmark=bench, yield_change_panel=yc, n_trials=1)
+print(res.summary())
+import json; print(json.dumps({k:v for k,v in res.metrics.items() if k in ("sharpe","ann_vol","ann_return","max_drawdown","total_financing","total_costs","sharpe_gross")}, indent=1))
