@@ -574,3 +574,111 @@ class TestFinancingCoverage:
         # Anchored on history: fed funds averaged ~5.9% in 1995 and ~0.2% in 2009.
         assert rate.loc["1995"].mean() > 0.04, "1995 funding is implausibly cheap"
         assert rate.loc["2009"].mean() < 0.02, "2009 funding is implausibly expensive"
+
+
+class TestMultipleTestingHonesty:
+    """A deflated Sharpe computed with n_trials=1 is not deflated at all.
+
+    The shipped tearsheet reported 0.9043 under the heading "probability the
+    Sharpe survives multiple testing", computed with n_trials=1, while the
+    project had searched 219 configurations. At the true count it is 0.067.
+    """
+
+    def test_one_trial_deflates_by_nothing(self):
+        """DSR at n_trials=1 must equal the probabilistic Sharpe exactly."""
+        from tqe.training.metrics import (
+            deflated_sharpe_ratio,
+            probabilistic_sharpe_ratio,
+        )
+
+        args = dict(sharpe=0.46, n_obs=2016, skew=0.26, kurtosis=10.3)
+        dsr = deflated_sharpe_ratio(args["sharpe"], 1, args["n_obs"],
+                                    args["skew"], args["kurtosis"])
+        psr = probabilistic_sharpe_ratio(args["sharpe"], 0.0, args["n_obs"],
+                                         args["skew"], args["kurtosis"])
+        assert dsr == pytest.approx(psr, abs=1e-9), (
+            "n_trials=1 must be a no-op; if it is not, the two are inconsistent"
+        )
+
+    def test_deflation_is_monotone_in_trials(self):
+        """More configurations searched can only make the verdict harsher."""
+        from tqe.training.metrics import deflated_sharpe_ratio
+
+        vals = [deflated_sharpe_ratio(0.46, n, 2016, 0.26, 10.3)
+                for n in (1, 10, 100, 219)]
+        assert all(a >= b for a, b in zip(vals, vals[1:])), vals
+        assert vals[-1] < 0.25, "219 trials should not leave a comfortable number"
+
+    def test_census_counts_study_rows(self, tmp_path):
+        from tqe.backtest.trials import count_configurations_searched
+
+        pd.DataFrame({"sharpe": [0.1, 0.2, 0.3]}).to_csv(tmp_path / "a_study.csv",
+                                                         index=False)
+        pd.DataFrame({"sharpe": [0.4, 0.5]}).to_csv(tmp_path / "b_experiment.csv",
+                                                    index=False)
+        census = count_configurations_searched(tmp_path)
+        assert census.n_trials == 5
+        assert census.sharpe_std == pytest.approx(np.std([0.1, 0.2, 0.3, 0.4, 0.5],
+                                                         ddof=1))
+
+    def test_census_is_safe_when_empty(self, tmp_path):
+        """No studies means the count is unknown, not that one trial was run."""
+        from tqe.backtest.trials import count_configurations_searched
+
+        census = count_configurations_searched(tmp_path / "does-not-exist")
+        assert census.n_trials == 1
+        assert census.sharpe_std is None
+
+
+class TestNoTradeBandCausality:
+    """The band width must never be set from information in the future."""
+
+    @staticmethod
+    def _targets(n=200, seed=0):
+        rng = np.random.default_rng(seed)
+        idx = pd.bdate_range("2020-01-01", periods=n)
+        return pd.DataFrame(rng.normal(0, 1e6, size=(n, 3)),
+                            index=idx, columns=["2 Yr", "5 Yr", "10 Yr"])
+
+    def test_future_cannot_change_the_past(self):
+        """Changing only the tail must leave every earlier held position identical.
+
+        This is the invariant a full-sample band violates: it sizes day one's
+        threshold from the mean gross book over the whole sample, so inflating
+        the tail silently widens the band at the start and changes which early
+        trades happen.
+        """
+        from tqe.signals.sizing import apply_no_trade_band
+
+        base = self._targets()
+        cut = len(base) // 2
+
+        bumped = base.copy()
+        bumped.iloc[cut:] *= 50.0          # only the future changes
+
+        held_a = apply_no_trade_band(base, threshold=0.10)
+        held_b = apply_no_trade_band(bumped, threshold=0.10)
+
+        pd.testing.assert_frame_equal(held_a.iloc[:cut], held_b.iloc[:cut])
+
+    def test_own_reference_is_also_causal(self):
+        from tqe.signals.sizing import apply_no_trade_band
+
+        base = self._targets(seed=7)
+        cut = len(base) // 2
+        bumped = base.copy()
+        bumped.iloc[cut:] *= 50.0
+
+        a = apply_no_trade_band(base, threshold=0.10, reference="own")
+        b = apply_no_trade_band(bumped, threshold=0.10, reference="own")
+        pd.testing.assert_frame_equal(a.iloc[:cut], b.iloc[:cut])
+
+    def test_band_still_suppresses_turnover(self):
+        """The causal fix must not have quietly disabled the band."""
+        from tqe.signals.sizing import apply_no_trade_band
+
+        tgt = self._targets(seed=3)
+        held = apply_no_trade_band(tgt, threshold=0.25)
+        raw_turn = tgt.diff().abs().sum().sum()
+        banded_turn = held.diff().abs().sum().sum()
+        assert banded_turn < raw_turn, "band did not reduce turnover at all"

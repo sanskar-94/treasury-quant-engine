@@ -398,14 +398,44 @@ def run_backtest(
 
     # Deflated Sharpe: honest adjustment for however many configurations were tried.
     from ..training.metrics import deflated_sharpe_ratio
+    from .trials import count_configurations_searched
+
+    # An n_trials of 1 deflates by nothing: the "deflated" Sharpe then equals the
+    # probabilistic Sharpe and the label is false. Recover the real count from the
+    # study files rather than requiring the caller to remember a flag, because the
+    # artefact that gets committed is the one produced by the default.
+    census = None
+    if n_trials <= 1:
+        census = count_configurations_searched(cfg.processed_dir.parent.parent / "results")
+        if census.n_trials > 1:
+            log.info(
+                "deflating by %d configurations recovered from the study files "
+                "(caller passed n_trials=%d)", census.n_trials, n_trials,
+            )
+            n_trials = census.n_trials
+
+    sharpe, n_obs = metrics.get("sharpe", 0.0), len(net_r)
+    skew, kurt = metrics.get("skew", 0.0), metrics.get("kurtosis", 3.0)
 
     metrics["n_trials"] = int(n_trials)
     metrics["deflated_sharpe"] = float(
-        deflated_sharpe_ratio(
-            metrics.get("sharpe", 0.0), n_trials, len(net_r),
-            metrics.get("skew", 0.0), metrics.get("kurtosis", 3.0),
-        )
+        deflated_sharpe_ratio(sharpe, n_trials, n_obs, skew, kurt)
     )
+    if n_trials <= 1:
+        log.warning(
+            "deflated Sharpe computed with n_trials=1, which applies NO multiple-"
+            "testing adjustment. Do not report it as adjusted."
+        )
+
+    # Bailey & Lopez de Prado prefer the *observed* dispersion of the trial
+    # Sharpes over the theoretical i.i.d. one when it is available. Here it is
+    # roughly three times wider, so the theoretical figure is the generous one.
+    if census is not None and census.sharpe_std:
+        metrics["trial_sharpe_std"] = float(census.sharpe_std)
+        metrics["deflated_sharpe_observed_sd"] = float(
+            deflated_sharpe_ratio(sharpe, n_trials, n_obs, skew, kurt,
+                                  sharpe_std=census.sharpe_std)
+        )
 
     if benchmark is not None:
         bench = benchmark.reindex(net_r.index).fillna(0.0)

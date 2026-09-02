@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -77,7 +78,27 @@ def stat(label: str, value: str, note: str = "") -> str:
 
 def build() -> str:
     m = json.loads((RESULTS / "metrics.json").read_text())
-    n_tests = 378
+    # Ask pytest, rather than counting "def test_" - parametrised tests expand,
+    # so the source count (323) understates what actually runs (385).
+    n_tests = 0
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", "--collect-only", "-q"],
+            cwd=ROOT, capture_output=True, text=True, timeout=300,
+        )
+        hit = re.search(r"(\d+)\s+tests?\s+collected", proc.stdout)
+        if hit:
+            n_tests = int(hit.group(1))
+        else:
+            # The project already sets -q in addopts, so a second -q switches
+            # pytest to per-file counts ("tests/test_x.py: 70") with no total.
+            n_tests = sum(int(v) for v in
+                          re.findall(r"^tests/\S+\.py:\s*(\d+)$", proc.stdout, re.M))
+    except Exception as exc:  # noqa: BLE001 - the report must still build
+        print(f"could not count tests ({exc})", file=sys.stderr)
+    if not n_tests:
+        n_tests = sum(len(re.findall(r"^\s*def test_", q.read_text(), re.M))
+                      for q in (ROOT / "tests").glob("test_*.py"))
     n_modules = len(list((ROOT / "src").rglob("*.py")))
     n_lines = sum(len(p.read_text().splitlines())
                   for d in ("src", "scripts", "tests")
@@ -103,6 +124,10 @@ def build() -> str:
 
     # ---------------- cover ---------------- #
     sh, ds = f"{m['sharpe']:.2f}", f"{m['deflated_sharpe']:.3f}"
+    nt = int(m.get("n_trials", 1))
+    cr = f"{m.get('canary_ratio', 0.0):.3f}"
+    dso = (f"{m['deflated_sharpe_observed_sd']:.3f}"
+           if m.get("deflated_sharpe_observed_sd") is not None else "n/a")
     fin, cst = pct(m['total_financing'] / 8e7), pct(m['total_costs'] / 8e7)
     A(f"""
 <div class="cover">
@@ -120,7 +145,7 @@ def build() -> str:
   </div>
   <p class="verdict"><strong>Headline result.</strong> After correct financing, the
   strategy does not clear its hurdle. That is the finding, and it is reported as such.
-  Seven separate bugs were found and fixed along the way &mdash; five of them cases where
+  Nine separate bugs were found and fixed along the way &mdash; five of them cases where
   a position was not being charged for the money it borrowed. Each one made the
   results <em>better</em>, and each one was silent. The engineering that makes those
   bugs findable is the substance of this project.</p>
@@ -130,11 +155,13 @@ def build() -> str:
       <h3 class="ct">Results at a glance</h3>
       <table class="mini">
         <tr><td>Shipped strategy, out of sample</td><td>Sharpe {sh}</td></tr>
-        <tr><td>Deflated Sharpe (multiple-testing adjusted)</td><td>{ds}</td></tr>
+        <tr><td>Deflated Sharpe &mdash; {nt} configurations searched</td><td>{ds}</td></tr>
+        <tr><td>Deflated Sharpe &mdash; observed trial dispersion</td><td>{dso}</td></tr>
         <tr><td>Best passive arm &mdash; vol-targeted 30 Yr</td><td>Sharpe +0.45</td></tr>
         <tr><td>Static long duration, 1993&ndash;2026</td><td>Sharpe +0.24</td></tr>
+        <tr><td>Configurations searched</td><td>{nt}</td></tr>
         <tr><td>Term-premium timing overlay</td><td>Sharpe &minus;0.40</td></tr>
-        <tr><td>Perfect-foresight canary ratio</td><td>0.006</td></tr>
+        <tr><td>Perfect-foresight canary ratio</td><td>{cr}</td></tr>
         <tr><td>Financing vs transaction cost</td><td>{fin} vs {cst} p.a.</td></tr>
       </table>
     </div>
@@ -151,7 +178,7 @@ def build() -> str:
             <li>Forecast horizon</li>
           </ol>
         </li>
-        <li>Seven bugs, and what they cost</li>
+        <li>Nine bugs, and what they cost</li>
         <li>Engineering</li>
         <li>What I would do next</li>
       </ol>
@@ -167,7 +194,7 @@ def build() -> str:
 curve, builds a self-consistent zero curve from it, extracts term-structure factors,
 learns a forecast of forward returns, turns that forecast into a risk-controlled
 portfolio, and routes the resulting orders through an execution layer. It runs
-end-to-end from one command and is covered by 378 tests.</p>
+end-to-end from one command and is covered by {n_tests} tests.</p>
 
 <p>It is built to answer one question honestly: <em>is there a tradable signal in the
 Treasury curve, and how would I know?</em> Most of the engineering exists to make the
@@ -248,7 +275,7 @@ version of this project once produced an impressive number that was not real.</p
     future-corruption canaries.</p></div>
   <div class="card"><h4>Perfect-foresight canary</h4>
     <p>A book built from tomorrow's returns runs beside the real one. It scores a
-    Sharpe of 14.6; the honest strategy reaches 0.6% of that. If the ratio ever
+    Sharpe above 15; the honest strategy reaches a fraction of a percent of that. If the ratio ever
     approached 1, the pipeline would be leaking the future.</p></div>
   <div class="card"><h4>Block sign-flip nulls</h4>
     <p>Significance is measured against signals whose 63-day blocks have had their
@@ -258,8 +285,12 @@ version of this project once produced an impressive number that was not real.</p
   <div class="card"><h4>Multiple-testing correction</h4>
     <p>Deflated and probabilistic Sharpe ratios (Bailey &amp; L&oacute;pez de Prado)
     adjust for the number of configurations tried; Holm&ndash;Bonferroni corrects
-    every family of comparisons. Deflated Sharpe on the shipped run is
-    {m['deflated_sharpe']:.3f}.</p></div>
+    every family of comparisons. This project searched <strong>{nt}</strong>
+    configurations; deflated against all of them the shipped Sharpe scores
+    <strong>{m['deflated_sharpe']:.3f}</strong>, and <strong>{dso}</strong> when the
+    measured dispersion of the trial Sharpes is used instead of the theoretical
+    one. The count is recovered from the study files automatically, because an
+    artefact produced by a default is the artefact that gets published.</p></div>
 </div>
 
 <h3>Shipped strategy, out of sample</h3>
@@ -362,10 +393,13 @@ reach that conclusion is the part that transfers to a desk.</p>
 
     # ---------------- 4. bugs ---------------- #
     A("""
-<h2>4 &nbsp; Seven bugs, and what they cost</h2>
-<p>Each of these made the results better. Each was silent. None was caught by a test
-that already existed &mdash; every one required either an invariant nobody had written
-down or a number that was too good to be true.</p>
+<h2>4 &nbsp; Nine bugs, and what they cost</h2>
+<p>Seven of these made the results better and two made them worse. All nine were
+silent, and none was caught by a test that already existed &mdash; every one required
+either an invariant nobody had written down or a number that was too good to be true.
+The last two were found by an adversarial audit of the P&amp;L core itself, run
+specifically because bug two had been discovered <em>inside</em> the one function this
+project designates as its single source of truth.</p>
 <table class="bugs">
 <thead><tr><th>Bug</th><th>Effect</th><th>How it surfaced</th><th>Fix</th></tr></thead>
 <tbody>
@@ -393,6 +427,17 @@ down or a number that was too good to be true.</p>
     <td>Returned an all-zero book</td>
     <td>Turnover penalty was four orders of magnitude off</td>
     <td>Penalty as a multiplier on real cost; &lambda; derived from a vol target</td></tr>
+<tr><td><strong>Deflated Sharpe never deflated</strong></td>
+    <td>Reported 0.904; true value 0.100, or 0.000 on observed dispersion</td>
+    <td>The tearsheet said "configurations searched: 1" beside a
+        multiple-testing-adjusted number, having searched 219</td>
+    <td>Trial count recovered from the study files automatically; both
+        dispersions reported; loud warning at n_trials=1</td></tr>
+<tr><td><strong>No-trade band read the future</strong></td>
+    <td>Sharpe 0.461 &rarr; 0.535 &mdash; the leak was <em>costing</em> return</td>
+    <td>Band width set from the full-sample mean gross book</td>
+    <td>Expanding-window band; test asserts changing only the future leaves
+        past positions bit-identical</td></tr>
 <tr><td><strong>EM exited after one iteration</strong></td>
     <td>Regime model never actually fitted</td>
     <td><code>inf &lt;= inf</code> evaluates to <code>True</code></td>

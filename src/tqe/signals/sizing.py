@@ -303,9 +303,10 @@ def apply_no_trade_band(
     targets:
         Desired positions per date.
     threshold:
-        Minimum change, as a fraction of the average gross book, that triggers a
-        rebalance in that instrument. 0.10 means "ignore moves smaller than 10%
-        of typical gross exposure".
+        Minimum change, as a fraction of the average gross book *so far*, that
+        triggers a rebalance in that instrument. 0.10 means "ignore moves smaller
+        than 10% of typical gross exposure". The average is expanding, not
+        full-sample, so the band never uses information from the future.
     reference:
         ``"gross"`` scales the threshold by the mean gross book (one scale for
         the whole portfolio); ``"own"`` scales by each instrument's own mean
@@ -319,19 +320,35 @@ def apply_no_trade_band(
     if targets.empty or threshold <= 0:
         return targets
 
+    # The band is sized from an EXPANDING mean, not a full-sample one. The target
+    # for day t is derived from information available at t-1, so rows up to and
+    # including t are all known at t and an expanding mean over them is causal;
+    # a full-sample mean is not, because it sets day one's band from the average
+    # book size over the whole future.
+    #
+    # This mattered less than it might have: the look-ahead version was measured
+    # at Sharpe +0.461 against +0.535 for the causal one, so it was making the
+    # reported result WORSE. It is fixed anyway. A look-ahead that happens to be
+    # conservative is still a look-ahead, and keeping it on the grounds that it
+    # flatters nobody is the selective rigour this project exists to avoid.
+    n_cols = max(targets.shape[1], 1)
     if reference == "own":
-        scale = targets.abs().mean().replace(0.0, np.nan)
-        band = (scale * threshold).fillna(0.0).to_numpy()
+        scale = targets.abs().expanding().mean().replace(0.0, np.nan)
+        band_frame = (scale * threshold).fillna(0.0)
     else:
-        gross = float(targets.abs().sum(axis=1).mean())
-        band = np.full(targets.shape[1], gross * threshold / max(targets.shape[1], 1))
+        gross = targets.abs().sum(axis=1).expanding().mean()
+        band_frame = pd.DataFrame(
+            np.repeat((gross * threshold / n_cols).to_numpy()[:, None], targets.shape[1], axis=1),
+            index=targets.index, columns=targets.columns,
+        )
 
     tgt = targets.to_numpy(dtype=float)
+    bands = band_frame.to_numpy(dtype=float)
     held = np.empty_like(tgt)
     current = np.zeros(tgt.shape[1])
     for i in range(len(tgt)):
         move = np.abs(tgt[i] - current)
-        trade = move > band
+        trade = move > bands[i]
         current = np.where(trade, tgt[i], current)
         held[i] = current
     return pd.DataFrame(held, index=targets.index, columns=targets.columns)

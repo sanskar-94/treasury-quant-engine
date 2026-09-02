@@ -40,13 +40,21 @@ Turning it into a portfolio:
 
 | Construction | Sharpe | p vs own controls | Reading |
 | --- | ---: | ---: | --- |
-| Directional, funded | **+0.51** | 0.024 | still carries a funding position |
+| Directional, funded | **+0.54** | 0.024 | still carries a funding position |
 | **Double-neutral, funded** | **+0.14** | **0.122** | the honest number |
-| Deflated Sharpe (145 configs) | **0.111** | — | ~11% chance it survives multiple testing |
+| Deflated Sharpe (219 configs) | **0.100** | — | ~10% chance it survives multiple testing |
+| Deflated Sharpe (observed dispersion) | **0.000** | — | using the measured spread of the 219 trial Sharpes |
 
 So: a real edge, in a specific place, too small to clear the bar once the
 funding channel is removed and the search width is accounted for. Not nothing,
 and not tradable.
+
+The two deflated figures differ because the first assumes the trial Sharpes are
+i.i.d. with a theoretical dispersion of 0.354, while the trials actually
+observed have a dispersion of 0.782 — more than twice as wide. Bailey and López
+de Prado prefer the measured value when you have it, and this project stored
+every trial, so it does. **The generous reading is 10%; the accurate one is
+that the result is indistinguishable from the best of 219 lucky draws.**
 
 ![Tearsheet](results/tearsheet.png)
 
@@ -197,8 +205,10 @@ reassuring and is easy to accept.
   are bit-identical.
 - **Per-fold scaling.** The scaler is refitted inside each fold on training data
   only.
-- **Deflated Sharpe.** All 145 searched configurations are counted, not the one
-  that won.
+- **Deflated Sharpe.** All 219 searched configurations are counted, not the one
+  that won — and the count is recovered automatically from the study files by
+  `backtest/trials.py` rather than passed by hand, because the artefact that
+  gets committed is the one produced by the default.
 
 ---
 
@@ -687,6 +697,65 @@ coverage, mean 2.95%), falls back to a cascade across short bill tenors, and
 rate observed, so an incomplete series degrades toward pessimism rather than
 toward free money. Three regression tests cover it, including one asserting that a
 flat market held on borrowed money must lose the carry.
+
+### The deflated Sharpe was never actually deflated
+
+The tearsheet had a row reading:
+
+| Configurations searched | 1 | feeds the deflation below |
+| Deflated Sharpe ratio | 0.9043 | probability the Sharpe survives multiple testing |
+
+Both numbers are in the shipped artefact. The second is meaningless given the
+first: `deflated_sharpe_ratio` takes `n_trials`, and at `n_trials=1` it reduces
+exactly to the probabilistic Sharpe — it deflates by nothing. The label claimed
+a multiple-testing adjustment that had not been applied.
+
+The function's own docstring says *"any backtest that searched more than one
+configuration must report it"*. The CLI defaulted `--n-trials` to 1, and the
+`tqe` help text even printed a hint reminding the user to pass the real count.
+So the honest path existed and required remembering a flag — and the artefact
+committed to `results/` is the one produced by the default. **A correctness
+property that depends on the operator remembering something is not a property.**
+
+This project has searched **219** configurations: 64 in the parameter study, 72
+and 54 in the two turnover studies, 18 across three horizon experiments, 5 in
+the integration experiment and 6 across the carry benchmarks. Every one was a
+draw compared against the others.
+
+| n_trials | Deflated Sharpe |
+| ---: | ---: |
+| 1 (as shipped) | 0.904 |
+| 219, theoretical i.i.d. dispersion | **0.100** |
+| 219, observed dispersion of the trial Sharpes | **0.000** |
+
+The fix is `backtest/trials.py`, which counts the rows of the study files the
+project already writes and derives the observed dispersion from the Sharpes they
+already store. `run_backtest` uses it automatically whenever the caller passes
+`n_trials <= 1`, warns loudly if the count cannot be established, and reports
+both dispersions — because the observed spread (0.782) is more than twice the
+theoretical one (0.354), which makes the theoretical figure the generous reading.
+
+I had also put the 0.904 on the cover of the project PDF, labelled
+"multiple-testing adjusted". That was the most flattering number in the document
+and it was the one number in it that had no basis.
+
+### A no-trade band that read the future
+
+`apply_no_trade_band` sized its threshold from
+`targets.abs().sum(axis=1).mean()` — the mean gross book over the **entire
+sample**. Day one's band was therefore set using the average position size over
+all of the following eight years.
+
+This one did not flatter anything. Measured both ways, the look-ahead version
+scored **+0.461** against **+0.535** for a causal expanding-window band: the
+leak was making the reported result *worse*. It is fixed anyway. A look-ahead
+that happens to be conservative is still a look-ahead, and keeping it because it
+flatters nobody is precisely the selective rigour this project exists to avoid.
+
+The regression test is the invariant rather than the number: multiply only the
+*second half* of the target series by 50 and every held position in the *first
+half* must be bit-identical. A full-sample band fails it; an expanding one
+cannot.
 
 ### The cash-neutral result, in full
 

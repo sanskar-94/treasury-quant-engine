@@ -122,7 +122,15 @@ def write_markdown(result, out_dir: str | Path, title: str = "Backtest Report") 
         "| Check | Value | Reading |",
         "| --- | ---: | --- |",
         f"| Configurations searched | {int(m.get('n_trials', 1))} | feeds the deflation below |",
-        f"| Deflated Sharpe ratio | {_fmt_num(m.get('deflated_sharpe'), 4)} | probability the Sharpe survives multiple testing |",
+        *([f"| Deflated Sharpe (observed trial dispersion) | "
+           f"{_fmt_num(m.get('deflated_sharpe_observed_sd'), 4)} | "
+           f"using the measured sd of trial Sharpes ({_fmt_num(m.get('trial_sharpe_std'), 3)}) "
+           f"rather than the theoretical one |"]
+          if m.get("deflated_sharpe_observed_sd") is not None else []),
+        f"| Deflated Sharpe ratio | {_fmt_num(m.get('deflated_sharpe'), 4)} | "
+        + ("probability the Sharpe survives multiple testing |"
+           if int(m.get("n_trials", 1)) > 1
+           else "**NOT adjusted** - only one configuration was counted |"),
     ]
     if "lookahead_canary_sharpe" in m:
         ratio = m.get("canary_ratio", float("nan"))
