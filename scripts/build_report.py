@@ -12,6 +12,7 @@ numbers are usually artifacts" cannot afford to contain stale ones.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import shutil
 import subprocess
@@ -32,6 +33,17 @@ CHROME = [
 
 def pct(x: float, dp: int = 2) -> str:
     return f"{x * 100:.{dp}f}%"
+
+
+def img(rel: str, caption: str = "", width: str = "100%") -> str:
+    """Embed a PNG inline so the report is a single self-contained file."""
+    path = RESULTS / rel
+    if not path.exists():
+        return ""
+    b64 = base64.b64encode(path.read_bytes()).decode()
+    cap = f'<figcaption>{caption}</figcaption>' if caption else ""
+    return (f'<figure><img src="data:image/png;base64,{b64}" style="width:{width}">'
+            f'{cap}</figure>')
 
 
 def read_csv(name: str) -> pd.DataFrame | None:
@@ -90,6 +102,8 @@ def build() -> str:
     A = parts.append
 
     # ---------------- cover ---------------- #
+    sh, ds = f"{m['sharpe']:.2f}", f"{m['deflated_sharpe']:.3f}"
+    fin, cst = pct(m['total_financing'] / 8e7), pct(m['total_costs'] / 8e7)
     A(f"""
 <div class="cover">
   <div class="kicker">Quantitative Research &amp; Systematic Trading</div>
@@ -110,12 +124,44 @@ def build() -> str:
   a position was not being charged for the money it borrowed. Each one made the
   results <em>better</em>, and each one was silent. The engineering that makes those
   bugs findable is the substance of this project.</p>
+
+  <div class="two">
+    <div>
+      <h3 class="ct">Results at a glance</h3>
+      <table class="mini">
+        <tr><td>Shipped strategy, out of sample</td><td>Sharpe {sh}</td></tr>
+        <tr><td>Deflated Sharpe (multiple-testing adjusted)</td><td>{ds}</td></tr>
+        <tr><td>Best passive arm &mdash; vol-targeted 30 Yr</td><td>Sharpe +0.45</td></tr>
+        <tr><td>Static long duration, 1993&ndash;2026</td><td>Sharpe +0.24</td></tr>
+        <tr><td>Term-premium timing overlay</td><td>Sharpe &minus;0.40</td></tr>
+        <tr><td>Perfect-foresight canary ratio</td><td>0.006</td></tr>
+        <tr><td>Financing vs transaction cost</td><td>{fin} vs {cst} p.a.</td></tr>
+      </table>
+    </div>
+    <div>
+      <h3 class="ct">Contents</h3>
+      <ol class="toc">
+        <li>What this system is</li>
+        <li>How results are judged</li>
+        <li>Findings
+          <ol>
+            <li>Where the term premium is paid</li>
+            <li>Why timing it fails</li>
+            <li>Whether the modules earn their place</li>
+            <li>Forecast horizon</li>
+          </ol>
+        </li>
+        <li>Seven bugs, and what they cost</li>
+        <li>Engineering</li>
+        <li>What I would do next</li>
+      </ol>
+    </div>
+  </div>
 </div>
-<div class="pb"></div>
 """)
 
     # ---------------- 1. what it is ---------------- #
-    A("""
+    A(f"""
 <h2>1 &nbsp; What this system is</h2>
 <p>The Treasury Quant Engine ingests the full history of the US Treasury par yield
 curve, builds a self-consistent zero curve from it, extracts term-structure factors,
@@ -141,6 +187,8 @@ answer trustworthy rather than flattering.</p>
   <div class="fa">&rarr;</div>
   <div class="fx">Execution<span>OMS &middot; TWAP<br>Almgren&ndash;Chriss</span></div>
 </div>
+
+{img("charts/curve_surface.png", "The fitted zero-coupon surface, 1990&ndash;2026. Every curve is bootstrapped self-consistently and round-trips to 1.4&times;10<sup>&minus;13</sup>.")}
 
 <h3>Components</h3>
 <div class="grid">
@@ -224,11 +272,12 @@ version of this project once produced an impressive number that was not real.</p
   {stat("Hit rate", pct(m['hit_rate']))}
   {stat("Turnover", f"{m['ann_turnover']:.1f}x")}
 </div>
+{img("tearsheet.png", "Out-of-sample tearsheet: equity curve, drawdown, rolling Sharpe and exposure. Funded and costed throughout.")}
+
 <p class="note">Financing cost {pct(m['total_financing'] / 8e7)} p.a. against trading
 costs of {pct(m['total_costs'] / 8e7)} p.a. &mdash; financing is roughly twenty times
 the transaction cost, which is the single most important economic fact about a levered
 rates book and the one most often left out of a backtest.</p>
-<div class="pb"></div>
 """)
 
     # ---------------- 3. findings ---------------- #
@@ -295,7 +344,9 @@ rather than quietly left in the code path.</p>
        {c: (lambda v: f"{float(v):.4f}") for c in horizon.columns[1:5]})}
 """)
 
-    A("""
+    A(f"""
+{img("charts/factors.png", "Level, slope and curvature extracted by PCA on yield <em>changes</em> &mdash; 77.2%, 13.3% and 5.0% of variance. Fitting on levels instead would produce factors that look cleaner and forecast nothing.")}
+
 <h3>3.5 &nbsp; What the whole thing amounts to</h3>
 <p>The signal is weak but not absent: the out-of-sample information coefficient is
 about +0.038, the shipped Sharpe is 0.46 before any allowance for the number of
@@ -357,7 +408,6 @@ regime-scaling option I added myself silently did nothing, because the sizing fu
 normalises signal magnitude away &mdash; scaling the signal beforehand cancelled
 exactly. A test that cannot fail is worse than no test, because it is counted as
 evidence.</p>
-<div class="pb"></div>
 """)
 
     # ---------------- 5. engineering ---------------- #
@@ -427,6 +477,26 @@ pre { background: #0f2233; color: #e6edf3; padding: 10pt 12pt; border-radius: 5p
   font-size: 8.6pt; line-height: 1.65; overflow-x: auto; }
 pre code { background: none; color: inherit; padding: 0; }
 .pb { page-break-after: always; }
+p, li { orphans: 3; widows: 3; }
+table, .card, .stat, .flow, .note, .verdict, figure { break-inside: avoid; }
+h2, h3, h4 { break-after: avoid; }
+h2 { break-before: page; }
+.cover h1, .cover + * { break-before: auto; }
+.cover ~ h2:first-of-type { break-before: auto; }
+figure { margin: 10pt 0 12pt; text-align: center; }
+figure img { max-width: 100%; border: 1px solid #e2e9ef; border-radius: 4px; }
+figcaption { font-size: 8.1pt; color: #5a6b7d; margin-top: 4pt;
+  text-align: left; line-height: 1.4; }
+.two { display: grid; grid-template-columns: 1.15fr 0.85fr; gap: 18pt; margin-top: 16pt; }
+.ct { font-size: 9.4pt; text-transform: uppercase; letter-spacing: 1pt;
+  color: #5a6b7d; margin: 0 0 5pt; font-weight: 650; }
+table.mini { font-size: 8.7pt; margin: 0; }
+table.mini td { padding: 3.6pt 0; border-bottom: 1px solid #e6ecf1; }
+table.mini td:last-child { text-align: right; font-weight: 650; color: #0b3d64;
+  white-space: nowrap; padding-left: 8pt; }
+ol.toc { font-size: 8.9pt; margin: 0; padding-left: 14pt; color: #38434e; }
+ol.toc li { margin-bottom: 2.5pt; }
+ol.toc ol { padding-left: 13pt; margin: 2.5pt 0 0; color: #5a6b7d; font-size: 8.4pt; }
 .cover { padding-top: 8mm; }
 .kicker { text-transform: uppercase; letter-spacing: 2.2pt; font-size: 8pt;
   color: #5a6b7d; font-weight: 650; }

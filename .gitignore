@@ -46,3 +46,4 @@ secrets.yaml
 .vscode/
 *.swp
 .ipynb_checkpoints/
+artifacts/audit/
