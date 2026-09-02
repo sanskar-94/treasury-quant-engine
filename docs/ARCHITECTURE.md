@@ -580,6 +580,164 @@ from its own output:
 | `backtest/` | complete (costs **and** financing) | in `test_training.py` |
 | `execution/` | complete (paper + Alpaca) | 25 |
 | `live/`, `api/`, `cli.py` | complete | smoke test + manual |
+| `backtest/trials.py` | complete | 4 |
+| `portfolio/funding.py`, `structures.py`, `hedging.py` | complete | in `test_advanced*.py` |
+| `curve/term_premium.py`, `dynamic.py` | complete | in `test_advanced2.py` |
+| `models/regime_switching.py` | complete, ships default-off | in `test_advanced2.py` |
+| `execution/scheduling.py` | complete | in `test_advanced2.py` |
 
-265 tests, plus a 45-check end-to-end smoke test on synthetic data
+385 tests, plus a 45-check end-to-end smoke test on synthetic data
 (`scripts/smoke_test.py`) that needs no network and runs in about a minute.
+---
+
+## 12. Modules added after the first negative result
+
+Everything above was built to answer "is there a signal?". The answer was
+"barely, and not tradable". These modules were added afterwards, each because a
+specific measurement pointed at it — and each is documented here with the verdict
+it earned, not just its interface. A module that was built and does not help is
+recorded as such rather than left in the tree implying otherwise.
+
+### 12a. `backtest/trials.py` — the honest denominator
+
+```python
+@dataclass(frozen=True)
+class TrialCensus:
+    n_trials: int
+    sharpe_std: float | None      # observed cross-sectional sd of trial Sharpes
+    sources: dict[str, int]
+
+def count_configurations_searched(results_dir) -> TrialCensus
+```
+
+Counts the rows of every study file in `results/` — each row is one
+configuration that was evaluated and compared — and recovers the observed
+dispersion of the trial Sharpes from the `sharpe` column where present.
+
+`run_backtest` calls this automatically whenever the caller passes
+`n_trials <= 1`. That default matters more than it looks: the deflated Sharpe is
+only as honest as the N fed into it, and at `n_trials=1` the function reduces
+exactly to the probabilistic Sharpe. The shipped tearsheet once reported 0.9043
+as "adjusted for multiple testing" while the project had searched **219**
+configurations, at which the true figure is 0.100 — or 0.000 using the observed
+dispersion (0.782) rather than the theoretical i.i.d. one (0.354).
+
+**Verdict: load-bearing.** It is the difference between a headline number that is
+false and one that is true.
+
+### 12b. `portfolio/funding.py` — cash-neutral structures
+
+```python
+def cash_neutral_structure(...)   -> CashNeutralTrade   # reports DV01 disturbance
+def doubly_neutral_structure(...) -> CashNeutralTrade   # exact 2x2 solve
+def funding_cost(...)             -> pd.Series
+def build_cash_neutral_book(...)  -> pd.DataFrame
+```
+
+Rule 3 of this codebase is that DV01-neutral is not cash-neutral: a 2s10s
+steepener with zero net DV01 still carries large net borrowed notional and must
+be financed. `doubly_neutral_structure` projects onto the null space of the
+`[cash, DV01]` constraint pair, giving exactly zero of both.
+
+Measured: a doubly-neutral 2s10s steepener pays **$0** funding against the raw
+structure's $559/day at 5%, is exactly immune to a parallel shift, and retains
+**95%** of the steepening P&L.
+
+**Verdict: does what it claims, does not rescue the strategy.** Sharpe −1.70
+funded against +0.04 for the raw structure.
+
+### 12c. `curve/term_premium.py` — ACM-style decomposition
+
+Separates the yield into an expected-short-rate path and the premium for
+holding duration, by regressing excess returns on lagged pricing factors over a
+rolling window.
+
+Measured over 1993–2026: the 10y term premium averages 154bp with a standard
+deviation of 149bp. Holding duration statically earns Sharpe **+0.236** funded;
+timing it on the premium earns **−0.403**, indistinguishable from its own
+controls (p = 0.68).
+
+**Verdict: a sound decomposition and not a timing signal.** The premium is real
+and it is collected by sitting still.
+
+### 12d. `curve/dynamic.py` — Dynamic Nelson-Siegel with a VAR
+
+Fits Diebold-Li factors with fixed decays, then a VAR on the factor series to
+forecast them forward. Fixed decays are not a simplification but an
+identifiability requirement — free `tau` made `beta_3` swing with a standard
+deviation of 1.65 and `tau_2` wander between 1 and 60.
+
+**Verdict: correctly implemented, no edge.** Its forecasts do not beat the
+ensemble and it is not in the shipped path.
+
+### 12e. `models/regime_switching.py` — two-state Hamilton filter
+
+Baum-Welch with a scaled forward-backward recursion. `rolling_regime_probs`
+refits on an expanding window and returns **filtered** probabilities — smoothed
+ones condition on the whole sample and would be look-ahead by construction.
+
+Wired into `size_portfolio` as an optional `regime_scale` that damps the DV01
+target (not the signal — `target_dv01_from_signal` normalises signal magnitude
+away, so scaling the signal beforehand cancels exactly, a bug I shipped and had
+to fix).
+
+**Verdict: ships default-off.** Same Sharpe, 39% less turnover — worth having as
+an option, not worth making a default on this evidence.
+
+### 12f. `execution/scheduling.py` — Almgren-Chriss and friends
+
+```python
+def twap_schedule(...)            -> ExecutionSchedule
+def vwap_schedule(...)            -> ExecutionSchedule
+def almgren_chriss_schedule(...)  -> ExecutionSchedule
+def implementation_shortfall(...) -> dict[str, float]
+def optimal_participation(...)    -> float
+```
+
+The closed-form optimal trajectory `x(t) = X sinh(k(T-t))/sinh(kT)`, with both
+limits asserted in tests: `lambda -> 0` gives TWAP, `lambda -> inf` front-loads.
+Guarded against `sinh` overflow past `kT > 300` and against the `0/0` at
+`kT -> 0`. `schedule_order` in `execution/oms.py` splits a parent into children
+carrying the parent id; `n_slices=1` returns the parent untouched, so slicing is
+always deliberate.
+
+**Verdict: correct and untested against reality.** The impact coefficients are
+calibrated from literature, not from fills, so the schedules are only as good as
+that assumption.
+
+### 12g. `backtest/attribution.py`, `portfolio/structures.py`, `portfolio/hedging.py`
+
+Attribution decomposes P&L into carry, roll-down, duration and convexity
+contributions. `structures.py` builds DV01-weighted steepeners and butterflies;
+`hedging.py` does key-rate hedging by ridge-regularised least squares, with the
+ridge scaled relative to `trace(A'A)/n` rather than absolutely — an absolute
+ridge cut the hedged exposure by 0.5% instead of 100%.
+
+**Verdict: analytically useful, no independent edge.**
+
+### 12h. `training/tune.py` and `viz/plots.py`
+
+Nested cross-validation for hyperparameters, and the tearsheet/diagnostic
+charts. Both infrastructure rather than research.
+
+---
+
+## 13. What the audit changed
+
+Two bugs in this list were found not by tests but by an adversarial audit of the
+P&L core, run specifically because a silent zero-financing bug had been found
+*inside* `run_backtest` — the one function this document designates as the single
+source of P&L truth (section 0). If the trusted core was wrong once, trusting it
+afterwards is not a policy.
+
+The invariants that now guard it:
+
+* a flat market held on borrowed money **must** lose the carry,
+* a day with no quoted funding rate is charged the most expensive rate observed,
+  never zero,
+* changing only the *future* of a target series must leave every *past* held
+  position bit-identical (the no-trade band was sizing its threshold from the
+  full sample),
+* a deflated Sharpe at `n_trials=1` must equal the probabilistic Sharpe exactly,
+  because that is what it is.
+
