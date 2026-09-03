@@ -1,0 +1,36 @@
+import sys; sys.path.insert(0,"src")
+import pandas as pd, numpy as np, json
+from tqe.config import load_config
+from tqe.backtest.engine import _funding_from_curve
+from tqe.backtest.metrics import performance_metrics
+from tqe.training.metrics import deflated_sharpe_ratio
+cfg=load_config(); base="artifacts/backtests/latest/"
+pos=pd.read_parquet(base+"positions.parquet"); ret=pd.read_parquet(base+"returns.parquet")["returns"]
+costs=pd.read_parquet(base+"costs.parquet")["costs"]; fin=pd.read_parquet(base+"financing.parquet")["financing"]
+met=json.load(open(base+"metrics.json")); idx=pos.index; cap=cfg.backtest.initial_capital
+rate=_funding_from_curve(cfg, idx).reindex(idx).ffill().to_numpy(float)
+days=np.empty(len(idx)); days[0]=1.0; days[1:]=np.diff(idx.to_numpy().astype("datetime64[D]").astype(float)); days=np.clip(days,0,10)
+net=pos.sum(axis=1).to_numpy(float); grossleg=pos.abs().sum(axis=1).to_numpy(float)
+s=cfg.costs.repo_spread_bp/1e4; gc=rate-s
+f_eng = net*rate*days/360.0
+f_netabs = net*gc*days/360.0 + np.abs(net)*s*days/360.0     # net convention, spread always a cost
+f_gross  = net*gc*days/360.0 + grossleg*s*days/360.0        # costs.py CostModel.financing, per leg
+# verify additivity: net_pnl = gross - costs - fin  => ret*cap + costs + fin = gross_pnl
+print("engine fin reproduced: %.10f vs %.10f"%(f_eng.sum(), fin.sum()))
+yrs=len(idx)/252.0
+def rep(name, f):
+    r = ret - pd.Series((f-f_eng)/cap, index=idx)
+    m = performance_metrics(r)
+    dsr = deflated_sharpe_ratio(m["sharpe"], len(r), int(met["n_trials"]), m.get("skew",0.0), m.get("kurtosis",3.0))
+    print("%-28s fin=$%10.0f  drag=%.4f%%  Sharpe=%.4f  annret=%.4f%%  totret=%.3f%%  maxdd=%.2f%%  DSR=%.4f"%(
+        name, f.sum(), f.sum()/cap/yrs*100, m["sharpe"], m["ann_return"]*100, ((1+r).prod()-1)*100, m["max_drawdown"]*100, dsr))
+rep("ENGINE (reported)", f_eng)
+rep("net conv, spread always cost", f_netabs)
+rep("costs.py per-leg gross", f_gross)
+print()
+print("delta engine->per-leg gross : $%.0f  (%.1f%% of engine financing)"%(f_gross.sum()-f_eng.sum(), 100*(f_gross.sum()-f_eng.sum())/f_eng.sum()))
+print("  of which sign-flip on net-short days: $%.0f"%(f_netabs.sum()-f_eng.sum()))
+print("  of which gross-minus-|net| balance  : $%.0f"%(f_gross.sum()-f_netabs.sum()))
+print("total transaction costs for scale     : $%.0f"%costs.sum())
+print()
+print("reported metrics sanity: sharpe %.6f dsr %.6f"%(met["sharpe"], met["deflated_sharpe"]))

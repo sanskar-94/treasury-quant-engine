@@ -462,16 +462,74 @@ class TestFinancing:
                          funding_rate=pd.Series(0.05, index=idx), run_canary=False)
         assert r.financing.sum() < 0, "a net short book receives funding"
 
-    def test_cash_neutral_book_pays_nothing(self):
-        """The invariant that makes relative-value P&L interpretable."""
+    def test_cash_neutral_book_pays_no_GC_but_still_pays_the_spread(self):
+        """A cash-neutral book escapes GC. It does not escape the balance sheet.
+
+        This test previously asserted ``abs(financing) < 1e-6`` - that a
+        cash-neutral book is financed for free. That is what the engine did, not
+        what a desk pays, and asserting it made the test a rubber stamp on the
+        code's own convention (rule 5). GC accrues on net cash borrowed and the
+        repo bid/offer accrues on gross: long the bond you finance at GC + s,
+        short it you lend cash at GC - s, so the desk pays s either way.
+        """
         from tqe.backtest.engine import run_backtest
 
         idx, tenors, rets, dv01 = self._panels()
         pos = pd.DataFrame({"2 Yr": 1_000_000.0, "10 Yr": -1_000_000.0}, index=idx)
         sig = pd.DataFrame({"2 Yr": 1.0, "10 Yr": -1.0}, index=idx)
-        r = run_backtest(sig, rets, dv01, Config(), positions=pos,
+        cfg = Config()
+        r = run_backtest(sig, rets, dv01, cfg, positions=pos,
                          funding_rate=pd.Series(0.05, index=idx), run_canary=False)
-        assert abs(r.financing.sum()) < 1e-6
+
+        spread = cfg.costs.repo_spread_bp / 1e4
+        gross = float(pos.abs().sum(axis=1).iloc[0])
+        days = np.empty(len(idx))
+        days[0] = 1.0
+        days[1:] = np.diff(idx.to_numpy().astype("datetime64[D]").astype(float))
+        expected = gross * spread * days.sum() / 360.0
+
+        assert r.financing.sum() == pytest.approx(expected, rel=1e-9), (
+            "a cash-neutral book must pay exactly gross * repo_spread, "
+            "no GC and no free lunch"
+        )
+        assert r.financing.sum() > 0.0
+
+    def test_net_short_book_is_charged_the_spread_not_credited(self):
+        """The sign error: net * spread pays the strategy when it is net short."""
+        from tqe.backtest.engine import run_backtest
+
+        idx, tenors, rets, dv01 = self._panels()
+        pos = pd.DataFrame({"2 Yr": -1_000_000.0, "10 Yr": -2_000_000.0}, index=idx)
+        sig = pd.DataFrame({"2 Yr": -1.0, "10 Yr": -1.0}, index=idx)
+        cfg = Config()
+        r = run_backtest(sig, rets, dv01, cfg, positions=pos,
+                         funding_rate=pd.Series(0.0, index=idx), run_canary=False)
+        # GC is zero, so whatever remains is the spread leg alone. It must be a
+        # cost to a short book, never a credit.
+        assert r.financing.sum() > 0.0, "a net-short book was paid the repo spread"
+
+    def test_financing_is_monotone_in_gross_at_fixed_net(self):
+        """More balance sheet must cost more, even when the net is unchanged.
+
+        The invariant that catches a spread charged on net: it makes financing
+        completely blind to gross, so a $50mm book and a $200mm book with the
+        same net cost exactly the same.
+        """
+        from tqe.backtest.engine import run_backtest
+
+        idx, tenors, rets, dv01 = self._panels()
+        cfg = Config()
+        totals = []
+        for extra in (0.0, 5_000_000.0, 20_000_000.0):
+            pos = pd.DataFrame({"2 Yr": 10_000_000.0 + extra, "10 Yr": -extra},
+                               index=idx)
+            sig = pd.DataFrame({"2 Yr": 1.0, "10 Yr": -1.0}, index=idx)
+            r = run_backtest(sig, rets, dv01, cfg, positions=pos,
+                             funding_rate=pd.Series(0.04, index=idx), run_canary=False)
+            totals.append(float(r.financing.sum()))
+        assert totals[0] < totals[1] < totals[2], (
+            f"financing ignored gross notional: {totals}"
+        )
 
     def test_financing_reduces_a_long_book_return(self):
         from tqe.backtest.engine import run_backtest

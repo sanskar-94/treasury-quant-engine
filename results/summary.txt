@@ -1,16 +1,16 @@
 Period          2018-08-06 .. 2026-08-28  (2016 trading days)
-Total return         4.50%
-CAGR                 0.55%
-Ann. vol             1.09%
-Sharpe                0.51
-Sortino               0.76
-Calmar                0.24
-Max drawdown        -2.27%
-Hit rate            51.21%
-Ann. turnover        18.82x
-Total costs         66,007  (0.08% p.a.)
-Financing        1,438,197  (1.80% p.a.)
-Sharpe (gross)        2.13
-Deflated Sharpe     0.1110
-Canary Sharpe        14.63  (perfect foresight; honest/canary = 0.006)
+Total return         4.13%
+CAGR                 0.51%
+Ann. vol             1.16%
+Sharpe                0.44
+Sortino               0.64
+Calmar                0.18
+Max drawdown        -2.75%
+Hit rate            52.25%
+Ann. turnover        18.99x
+Total costs         66,898  (0.08% p.a.)
+Financing        1,581,156  (1.98% p.a.)
+Sharpe (gross)        2.09
+Deflated Sharpe     0.0601
+Canary Sharpe        15.32  (perfect foresight; honest/canary = 0.003)
 Benchmark Sharpe      0.17

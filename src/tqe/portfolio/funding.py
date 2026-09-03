@@ -554,8 +554,13 @@ def funding_cost(
     trade: CashNeutralTrade,
     funding_rate: float,
     days: float = 1,
+    repo_spread: float = 0.0,
 ) -> float:
-    r"""Repo charge on a trade's net notional over ``days``, ACT/360.
+    r"""Repo charge on a trade over ``days``, ACT/360.
+
+    GC accrues on **net** cash borrowed; the repo bid/offer accrues on **gross**
+    balance sheet. A cash-neutral trade therefore pays no GC and still pays the
+    spread.
 
     .. math:: \text{cost} = \text{net notional} \times r \times \frac{\text{days}}{360}
 
@@ -580,8 +585,14 @@ def funding_cost(
         whose stored exposure disagrees with its own positions is exactly the
         kind of object that has previously produced a fictitious Sharpe.
     funding_rate : float
-        Annualised repo rate as a **decimal** (0.0425 = 4.25%), i.e. the bill
-        yield plus ``cfg.costs.repo_spread_bp``.
+        Annualised **general-collateral** repo rate as a decimal (0.0425 =
+        4.25%). The repo bid/offer is passed separately as ``repo_spread``,
+        because GC accrues on net cash borrowed while the spread is paid on the
+        gross balance sheet - folding them into one rate charges the spread on
+        net and finances a cash-neutral book for nothing.
+    repo_spread : float, default 0.0
+        Repo bid/offer as a decimal (0.0005 = 5bp), charged on **gross**
+        notional in both directions.
     days : float, default 1
         **Calendar** days, not business days. A position held over a weekend is
         funded for three days; charging one is a systematic understatement of
@@ -590,15 +601,16 @@ def funding_cost(
     Returns
     -------
     float
-        Dollars of financing. Approximately zero for a cash-neutral trade, and
-        that is asserted, not hoped for.
+        Dollars of financing. A cash-neutral trade pays **zero GC** - that is
+        asserted, not hoped for - but still pays ``gross * repo_spread``, which
+        is the real cost of carrying a balance sheet and is not zero.
 
     Raises
     ------
     AssertionError
         If ``trade.net_notional`` disagrees with ``trade.legs.sum()``, or if a
         trade that reports itself cash-neutral is nevertheless charged a
-        non-negligible amount.
+        non-negligible amount **of GC**.
     """
     net = float(trade.legs.sum())
     gross = trade.gross_notional
@@ -608,18 +620,20 @@ def funding_cost(
         f"legs ({net:+,.6g}) - the stored exposure cannot be trusted",
     )
 
-    cost = net * float(funding_rate) * float(days) / ACT_360
+    gc_leg = net * float(funding_rate) * float(days) / ACT_360
+    spread_leg = gross * float(repo_spread) * float(days) / ACT_360
 
     if trade.is_cash_neutral():
         # The natural scale of the charge is what the *gross* book would pay;
         # comparing to an absolute dollar figure would be a Rule 4 violation.
+        # Only the GC leg vanishes: the spread is paid on gross either way.
         scale = gross * abs(float(funding_rate)) * abs(float(days)) / ACT_360
         _require(
-            abs(cost) <= max(1e-8 * scale, 1e-6),
-            f"a cash-neutral trade was charged {cost:+,.6g} of financing "
+            abs(gc_leg) <= max(1e-8 * scale, 1e-6),
+            f"a cash-neutral trade was charged {gc_leg:+,.6g} of GC financing "
             f"(net notional {net:+,.6g} on gross {gross:,.0f})",
         )
-    return float(cost)
+    return float(gc_leg + spread_leg)
 
 
 def build_cash_neutral_book(

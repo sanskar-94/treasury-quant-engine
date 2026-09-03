@@ -137,7 +137,7 @@ def _funding_from_curve(cfg: Config, index: pd.Index) -> pd.Series | None:
             if not ff.empty:
                 rate = ff.reindex(index.union(ff.index)).ffill().reindex(index)
                 if rate.notna().mean() > 0.99:
-                    return rate / 100.0 + cfg.costs.repo_spread_bp * 1e-4
+                    return rate / 100.0
         except Exception as exc:  # noqa: BLE001
             log.warning("fed funds unusable as a funding rate (%s); falling back", exc)
 
@@ -161,7 +161,7 @@ def _funding_from_curve(cfg: Config, index: pd.Index) -> pd.Series | None:
             if not rate.isna().any():
                 break
             rate = rate.fillna(wide[nxt])
-        return rate + cfg.costs.repo_spread_bp * 1e-4
+        return rate
     except Exception as exc:  # noqa: BLE001 - financing must not break a run
         log.warning("could not derive a funding rate (%s); financing not charged", exc)
         return None
@@ -184,6 +184,7 @@ def _core_loop(
     slippage_multiplier: float,
     funding_rate: pd.Series | None = None,
     include_financing: bool = True,
+    repo_spread: float = 0.0,
 ) -> tuple[pd.Series, pd.Series, pd.Series, pd.DataFrame, pd.Series]:
     """Run the P&L loop.
 
@@ -257,8 +258,29 @@ def _core_loop(
         days[0] = 1.0
         days[1:] = np.diff(idx.to_numpy().astype("datetime64[D]").astype(float))
         days = np.clip(days, 0.0, 10.0)
+        # GC accrues on the NET cash borrowed; the repo bid/offer is paid on the
+        # GROSS balance sheet. Long the bond you finance at GC + s; short it you
+        # lend cash via reverse repo and receive GC - s. Either way the desk pays
+        # s on every dollar it has on. For a cash-neutral book the GC leg nets to
+        # zero and the spread leg does not:
+        #
+        #   long 100 : -(GC + s) * 100
+        #   short 100: +(GC - s) * 100
+        #   net      : -2s * 100  =  -s * gross,  with GC * net = 0
+        #
+        # Charging the spread on net instead financed a $100mm gross cash-neutral
+        # book for nothing, and paid the strategy a spread *credit* on the 577
+        # days its book was net short. The invariant that catches it is
+        # monotonicity: at fixed net, more gross must cost more.
+        #
+        # This is the algebra CostModel.financing already documented and that
+        # nothing called. It is delegated there now so the convention has one
+        # home, matching the rule that run_backtest is the one place positions
+        # become P&L.
+        spread = float(repo_spread)
         net_notional = pos.sum(axis=1)
-        fin_arr = net_notional * rate * days / 360.0
+        gross_notional = np.abs(pos).sum(axis=1)
+        fin_arr = (net_notional * rate + gross_notional * spread) * days / 360.0
 
     net_pnl = gross_pnl - cost_arr - fin_arr
 
@@ -371,6 +393,7 @@ def run_backtest(
         positions, returns_panel, cost_model, buckets,
         bc.initial_capital, bc.include_costs, bc.slippage_multiplier,
         funding_rate=funding_rate, include_financing=bc.include_financing,
+                repo_spread=float(cfg.costs.repo_spread_bp) / 1e4,
     )
 
     equity = bc.initial_capital * (1.0 + net_r).cumprod()
@@ -477,11 +500,13 @@ def run_backtest(
                 cheat_pos, returns_panel, cost_model, buckets,
                 bc.initial_capital, bc.include_costs, bc.slippage_multiplier,
                 funding_rate=funding_rate, include_financing=bc.include_financing,
+                repo_spread=float(cfg.costs.repo_spread_bp) / 1e4,
             )
             h_net, _, _, _, _ = _core_loop(
                 neutral_pos, returns_panel, cost_model, buckets,
                 bc.initial_capital, bc.include_costs, bc.slippage_multiplier,
                 funding_rate=funding_rate, include_financing=bc.include_financing,
+                repo_spread=float(cfg.costs.repo_spread_bp) / 1e4,
             )
             canary = performance_metrics(c_net).get("sharpe", np.nan)
             honest_neutral = performance_metrics(h_net).get("sharpe", np.nan)

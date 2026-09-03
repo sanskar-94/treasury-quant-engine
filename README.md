@@ -40,9 +40,9 @@ Turning it into a portfolio:
 
 | Construction | Sharpe | p vs own controls | Reading |
 | --- | ---: | ---: | --- |
-| Directional, funded | **+0.54** | 0.024 | still carries a funding position |
+| Directional, funded | **+0.44** | 0.024 | still carries a funding position |
 | **Double-neutral, funded** | **+0.14** | **0.122** | the honest number |
-| Deflated Sharpe (219 configs) | **0.100** | — | ~10% chance it survives multiple testing |
+| Deflated Sharpe (219 configs) | **0.060** | — | ~6% chance it survives multiple testing |
 | Deflated Sharpe (observed dispersion) | **0.000** | — | using the measured spread of the 219 trial Sharpes |
 
 So: a real edge, in a specific place, too small to clear the bar once the
@@ -53,7 +53,7 @@ The two deflated figures differ because the first assumes the trial Sharpes are
 i.i.d. with a theoretical dispersion of 0.354, while the trials actually
 observed have a dispersion of 0.782 — more than twice as wide. Bailey and López
 de Prado prefer the measured value when you have it, and this project stored
-every trial, so it does. **The generous reading is 10%; the accurate one is
+every trial, so it does. **The generous reading is 6%; the accurate one is
 that the result is indistinguishable from the best of 219 lucky draws.**
 
 ![Tearsheet](results/tearsheet.png)
@@ -747,7 +747,9 @@ sample**. Day one's band was therefore set using the average position size over
 all of the following eight years.
 
 This one did not flatter anything. Measured both ways, the look-ahead version
-scored **+0.461** against **+0.535** for a causal expanding-window band: the
+scored **+0.461** against **+0.535** for a causal expanding-window band (both
+measured before the repo-spread fix below, which takes the shipped figure to
+0.440): the
 leak was making the reported result *worse*. It is fixed anyway. A look-ahead
 that happens to be conservative is still a look-ahead, and keeping it because it
 flatters nobody is precisely the selective rigour this project exists to avoid.
@@ -756,6 +758,68 @@ The regression test is the invariant rather than the number: multiply only the
 *second half* of the target series by 50 and every held position in the *first
 half* must be bit-identical. A full-sample band fails it; an expanding one
 cannot.
+
+### The repo spread was charged on the wrong base
+
+`_funding_from_curve` returned `GC + repo_spread` and the engine applied that
+combined rate to **net** notional:
+
+```python
+fin_arr = net_notional * rate * days / 360.0     # rate = GC + spread
+```
+
+Expanded, that is `net*GC + net*spread`. The repo bid/offer therefore scaled
+with the *net* position, which is wrong in a way that has a clean closed form.
+A desk long \$100 finances at GC + s and pays `(GC+s)·100`; short \$100 it lends
+cash via reverse repo and receives `(GC−s)·100`. Net:
+
+```
+-(GC + s)·100 + (GC - s)·100  =  -2s·100  =  -s · gross,   with GC · net = 0
+```
+
+**GC accrues on net cash borrowed; the spread accrues on gross balance sheet.**
+
+The project already knew this. `CostModel.financing` implements
+`repo*notional + spread*|notional|` and its docstring spells out the reasoning —
+*"Either way the desk pays the spread"*. It is **never called anywhere in the
+repo**: dead code documenting the correct convention while the engine
+reimplemented a cheaper one.
+
+Two consequences, both flattering:
+
+1. **Free balance sheet.** The headline book averages \$34.6mm gross against
+   \$12.7mm net, so ~\$22mm a day was financed at GC flat instead of GC + 5bp.
+2. **A sign error.** On the 577 of 2016 days the book was net short,
+   `net*spread` is *negative* — the engine **paid the strategy** the spread it
+   should have been charging.
+
+| | Reported | Correct |
+| --- | ---: | ---: |
+| Total financing | \$1,490,965 | **\$1,581,156** |
+| Financing drag | 1.86% p.a. | 1.98% p.a. |
+| Sharpe | 0.535 | **0.440** |
+| Deflated Sharpe (219) | 0.100 | **0.060** |
+| Max drawdown | −2.44% | −2.75% |
+
+The \$90,192 that went unfinanced is **1.35× the entire transaction-cost bill**
+of \$66,898 — the largest un-charged item in the P&L, bigger than every spread,
+impact and commission dollar combined.
+
+The invariant that catches it is monotonicity: **at fixed net, more gross must
+cost more.** Before the fix, a \$50mm book and a \$200mm book with the same net
+financed identically. A cash-neutral \$100mm book financed for \$0 against a
+correct \$50,694 a year.
+
+It survived because `test_cash_neutral_book_pays_nothing` asserted
+`abs(financing) < 1e-6` — the engine's own convention rather than the market's.
+That is rule 5 violated in the one place it mattered: a test that ratifies the
+code's output cannot detect that the output is wrong. It now asserts that a
+cash-neutral book pays exactly `gross × spread`, that a net-short book is
+*charged* rather than credited, and that financing is monotone in gross.
+
+Note the fix leaves every all-long result unchanged — for those books gross
+equals net and the two formulas coincide. Only books carrying offsetting shorts
+move, which is the correct signature for this bug.
 
 ### The cash-neutral result, in full
 

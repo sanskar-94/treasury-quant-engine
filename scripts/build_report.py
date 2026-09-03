@@ -145,7 +145,7 @@ def build() -> str:
   </div>
   <p class="verdict"><strong>Headline result.</strong> After correct financing, the
   strategy does not clear its hurdle. That is the finding, and it is reported as such.
-  Nine separate bugs were found and fixed along the way &mdash; five of them cases where
+  Ten separate bugs were found and fixed along the way &mdash; six of them cases where
   a position was not being charged for the money it borrowed. Each one made the
   results <em>better</em>, and each one was silent. The engineering that makes those
   bugs findable is the substance of this project.</p>
@@ -178,7 +178,7 @@ def build() -> str:
             <li>Forecast horizon</li>
           </ol>
         </li>
-        <li>Nine bugs, and what they cost</li>
+        <li>Ten bugs, and what they cost</li>
         <li>Engineering</li>
         <li>What I would do next</li>
       </ol>
@@ -393,13 +393,15 @@ reach that conclusion is the part that transfers to a desk.</p>
 
     # ---------------- 4. bugs ---------------- #
     A("""
-<h2>4 &nbsp; Nine bugs, and what they cost</h2>
-<p>Seven of these made the results better and two made them worse. All nine were
+<h2>4 &nbsp; Ten bugs, and what they cost</h2>
+<p>Eight of these made the results better and two made them worse. All ten were
 silent, and none was caught by a test that already existed &mdash; every one required
 either an invariant nobody had written down or a number that was too good to be true.
-The last two were found by an adversarial audit of the P&amp;L core itself, run
+The last three were found by an adversarial audit of the P&amp;L core itself, run
 specifically because bug two had been discovered <em>inside</em> the one function this
-project designates as its single source of truth.</p>
+project designates as its single source of truth. Two of those three were guarded by
+tests that asserted the code's own behaviour rather than an external invariant &mdash;
+a test that ratifies the output cannot detect that the output is wrong.</p>
 <table class="bugs">
 <thead><tr><th>Bug</th><th>Effect</th><th>How it surfaced</th><th>Fix</th></tr></thead>
 <tbody>
@@ -427,6 +429,12 @@ project designates as its single source of truth.</p>
     <td>Returned an all-zero book</td>
     <td>Turnover penalty was four orders of magnitude off</td>
     <td>Penalty as a multiplier on real cost; &lambda; derived from a vol target</td></tr>
+<tr><td><strong>Repo spread charged on net, not gross</strong></td>
+    <td>Sharpe 0.535 &rarr; 0.440; $90,192 unfinanced, 1.35&times; the entire cost bill</td>
+    <td>At fixed net, a $50mm and a $200mm book financed identically &mdash;
+        financing was blind to gross</td>
+    <td>GC on net, spread on gross, matching the convention
+        <code>CostModel.financing</code> already documented and nothing called</td></tr>
 <tr><td><strong>Deflated Sharpe never deflated</strong></td>
     <td>Reported 0.904; true value 0.100, or 0.000 on observed dispersion</td>
     <td>The tearsheet said "configurations searched: 1" beside a
@@ -434,7 +442,7 @@ project designates as its single source of truth.</p>
     <td>Trial count recovered from the study files automatically; both
         dispersions reported; loud warning at n_trials=1</td></tr>
 <tr><td><strong>No-trade band read the future</strong></td>
-    <td>Sharpe 0.461 &rarr; 0.535 &mdash; the leak was <em>costing</em> return</td>
+    <td>Sharpe 0.461 &rarr; 0.535 &mdash; the leak was <em>costing</em> return (both measured before the repo-spread fix below)</td>
     <td>Band width set from the full-sample mean gross book</td>
     <td>Expanding-window band; test asserts changing only the future leaves
         past positions bit-identical</td></tr>
