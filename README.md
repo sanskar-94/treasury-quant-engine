@@ -659,18 +659,19 @@ costed over 1990–2026. Nothing is fitted, so the whole window is out of sample
 
 | Arm | Sharpe | Ann. return | Financing p.a. | Leverage |
 | --- | ---: | ---: | ---: | ---: |
-| Constant DV01 3 Mo | −0.49 | −2.82% | 54.90% | 17.3× |
-| Constant DV01 1 Yr | +0.17 | +0.87% | 21.60% | 6.8× |
-| Constant DV01 3 Yr | +0.29 | +1.44% | 6.22% | 1.9× |
-| Constant DV01 10 Yr | +0.28 | +1.41% | 2.28% | 0.7× |
-| **Vol-targeted 30 Yr** | **+0.45** | **+2.27%** | 1.35% | 0.4× |
+| Constant DV01 3 Mo | -0.50 | -2.57% | 47.63% | 17.3× |
+| Constant DV01 1 Yr | +0.12 | +0.54% | 17.73% | 6.8× |
+| Constant DV01 3 Yr | +0.26 | +1.24% | 5.46% | 1.9× |
+| Constant DV01 7 Yr | +0.29 | +1.41% | 2.61% | 0.9× |
+| Constant DV01 10 Yr | +0.29 | +1.38% | 2.05% | 0.7× |
+| **Vol-targeted 30 Yr** | **+0.42** | **+1.75%** | 1.19% | 0.4× |
 
 **The front end loses money and the long end makes it, and the reason is
 leverage.** Matching 5% volatility with 3-month bills takes 17× leverage against
 0.4× with 30-year bonds; financing scales with borrowed notional, so the short
 end pays away 55% a year in interest to own the same risk. The best way to be
 paid for duration is to own it where you need the least borrowed money. Volatility
-targeting beats constant DV01 (+0.45 vs +0.29) and the advantage grows
+targeting beats constant DV01 (+0.42 vs +0.29) and the advantage grows
 monotonically with maturity, which is the same effect seen from the other side.
 
 ### The financing-coverage bug
@@ -820,6 +821,57 @@ cash-neutral book pays exactly `gross × spread`, that a net-short book is
 Note the fix leaves every all-long result unchanged — for those books gross
 equals net and the two formulas coincide. Only books carrying offsetting shorts
 move, which is the correct signature for this bug.
+
+### Auditing the P&L core itself
+
+Bug 2 was found *inside* `run_backtest` — the one function this document
+designates as the single source of P&L truth. If the trusted core was wrong
+once, continuing to trust it is not a policy, so it was audited adversarially
+across six independent lenses. That audit produced bugs 8, 9 and 10. Three
+lenses came back clean, and what they checked is worth recording, because a
+clean result is only informative if you know what was looked for.
+
+**Data integrity — clean.** Only 2 rows in 9,171 (0.02%) show no tenor moving at
+all, so forward-filling is not manufacturing stale zero-return days that would
+depress measured volatility and inflate Sharpe. `corr(yield_change, return) =
+−0.996` for the 10y, so a yield rise correctly produces a price loss. No weekend
+rows, no yields outside [−1%, 25%], largest single-day move 81bp.
+
+**Look-ahead sweep — clean, one real hit.** A sweep of `src/` and `scripts/` for
+full-sample statistics used to scale, band, threshold or normalise anything
+returned exactly one live instance: `duration_harvest.py` scaled positions by the
+full-sample standard deviation. I had originally waved this away on the grounds
+that a constant multiplier cannot change a Sharpe ratio. That is false when costs
+are non-linear, and this cost model charges square-root impact, so cost grows as
+`size^1.5`. Fixed to an expanding-window estimate with a one-year warm-up. It
+moved the best arm from +0.453 to **+0.424** and shifted the best single point
+from 3y to 7y; every conclusion held.
+
+**Significance machinery — clean, and slightly conservative.** The block
+sign-flip null preserves the absolute signal values *exactly* and gross
+concentration exactly (2.9596 both), and autocorrelation nearly (0.9975 →
+0.9821), so a placebo book carries the same risk profile as the real one. Fed
+twelve genuinely zero-skill signals, it returned p-values with median 0.571 and
+**0 of 12 below 0.10** — it does not over-reject, which is the safe direction for
+a null to err in.
+
+**The canary is not decorative.** Injecting real future information moves it, and
+the response has exactly the right shape:
+
+| Signal | Sharpe |
+| --- | ---: |
+| honest | +0.056 |
+| today's return (no information once lagged) | −0.289 |
+| tomorrow's return (exactly cancels the lag) | −0.002 |
+| **T+2 — a genuine leak** | **+0.368** |
+| T+3 — a genuine leak | +0.199 |
+
+The middle two rows are the interesting ones. Feeding "tomorrow's return" as a
+signal produces *nothing*, because the pipeline lags every signal by one day and
+the shift cancels it exactly. Only information from T+2 onward is genuinely
+future, and when it is injected the Sharpe jumps 6.6×. **The causality boundary
+is enforced in one place and a signal cannot bypass it** — a leak would have to
+enter through the features, which is what the feature-corruption tests cover.
 
 ### The cash-neutral result, in full
 

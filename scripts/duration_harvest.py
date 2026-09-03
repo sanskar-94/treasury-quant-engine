@@ -38,6 +38,25 @@ from tqe.data.universe import constant_maturity_total_return, universe_panel  # 
 from tqe.logging_utils import setup_logging  # noqa: E402
 
 
+def _causal_vol_scale(pnl: pd.Series, target_vol: float, min_periods: int = 252) -> pd.Series:
+    """Scale to a volatility target using only history.
+
+    The first version of this script scaled by the FULL-SAMPLE standard
+    deviation, on the reasoning that a constant multiplier cannot change a
+    Sharpe ratio. That reasoning is wrong here: the cost model charges
+    square-root impact, so cost grows as size^1.5 and net P&L is not a constant
+    multiple of position size. Financing is linear but costs are not, so the
+    scalar does move the answer - and choosing it with full-sample knowledge is
+    look-ahead.
+
+    An expanding standard deviation uses only what was observable, with a
+    one-year warm-up before any position is taken.
+    """
+    sd = pnl.expanding(min_periods=min_periods).std() * np.sqrt(252)
+    scale = (target_vol / sd.where(sd > 0)).shift(1)
+    return scale.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+
+
 def hold(pos: pd.DataFrame, tr, dv, yc, cfg) -> dict:
     """Funded, costed P&L of holding a given notional book."""
     dummy = pd.DataFrame(0.0, index=pos.index, columns=tr.columns)
@@ -51,8 +70,7 @@ def constant_dv01_book(tenors, tr, dv, idx, cfg, target_vol=0.05, weights=None):
     w = pd.Series(weights if weights is not None else 1.0, index=tenors, dtype=float)
     raw = unit.mul(w, axis=1)
     pnl = (raw * tr[tenors].reindex(idx)).sum(axis=1).fillna(0.0) / cfg.backtest.initial_capital
-    sd = pnl.std() * np.sqrt(252)
-    scaled = raw * (target_vol / sd) if sd > 0 else raw * 0.0
+    scaled = raw.mul(_causal_vol_scale(pnl, target_vol), axis=0)
     pos = pd.DataFrame(0.0, index=idx, columns=tr.columns)
     pos[tenors] = scaled
     return pos
@@ -71,8 +89,7 @@ def vol_targeted_book(tenor, tr, dv, idx, cfg, target_vol=0.05, lookback=63):
     raw = unit / vol.where(vol.abs() > 1e-12)
     raw = raw.replace([np.inf, -np.inf], np.nan).ffill().fillna(0.0)
     pnl = (raw * tr[tenor].reindex(idx)).fillna(0.0) / cfg.backtest.initial_capital
-    sd = pnl.std() * np.sqrt(252)
-    scaled = raw * (target_vol / sd) if sd > 0 else raw * 0.0
+    scaled = raw.mul(_causal_vol_scale(pnl, target_vol), axis=0)
     pos = pd.DataFrame(0.0, index=idx, columns=tr.columns)
     pos[tenor] = scaled
     return pos
